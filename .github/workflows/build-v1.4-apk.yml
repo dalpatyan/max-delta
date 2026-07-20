@@ -57,6 +57,7 @@ jobs:
           test -s "$apk"
           "$ANDROID_SDK_ROOT/build-tools/35.0.0/aapt" dump badging "$apk" > app/build/outputs/apk/release/apk-info.txt
           sha256sum "$apk" > app/build/outputs/apk/release/unsigned-sha256.txt
+          cp "$ANDROID_SDK_ROOT/build-tools/35.0.0/lib/apksigner.jar" app/build/outputs/apk/release/apksigner.jar
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
@@ -66,5 +67,6 @@ jobs:
             app/build/outputs/apk/release/app-release-unsigned.apk
             app/build/outputs/apk/release/apk-info.txt
             app/build/outputs/apk/release/unsigned-sha256.txt
+            app/build/outputs/apk/release/apksigner.jar
           if-no-files-found: error
           retention-days: 7
