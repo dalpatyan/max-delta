@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Max Δ</string>
+    <string name="reminder_channel_name">Task reminders</string>
+    <string name="reminder_channel_description">Notifications for task and subtask reminders</string>
+</resources>
