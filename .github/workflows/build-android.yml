@@ -1,0 +1,67 @@
+name: Build Android APK
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Test and build unsigned release
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK components
+        run: sdkmanager --install "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Run unit tests
+        run: ./gradlew --no-daemon testDebugUnitTest
+
+      - name: Build unsigned release APK
+        run: ./gradlew --no-daemon assembleRelease
+
+      - name: Record APK metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk="app/build/outputs/apk/release/app-release-unsigned.apk"
+          test -s "$apk"
+          "$ANDROID_SDK_ROOT/build-tools/35.0.0/aapt" dump badging "$apk" > app/build/outputs/apk/release/apk-info.txt
+          sha256sum "$apk" > app/build/outputs/apk/release/unsigned-sha256.txt
+          cp "$ANDROID_SDK_ROOT/build-tools/35.0.0/lib/apksigner.jar" app/build/outputs/apk/release/apksigner.jar
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: max-delta-unsigned
+          path: |
+            app/build/outputs/apk/release/app-release-unsigned.apk
+            app/build/outputs/apk/release/apk-info.txt
+            app/build/outputs/apk/release/unsigned-sha256.txt
+            app/build/outputs/apk/release/apksigner.jar
+          if-no-files-found: error
+          retention-days: 7

@@ -1,5 +1,7 @@
 package com.example.todotimer.ui
 
+import android.app.DatePickerDialog
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -9,23 +11,46 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.example.todotimer.data.AnalyticsRange
+import com.example.todotimer.data.AnalyticsRanges
+import com.example.todotimer.data.AnalyticsTime
 import com.example.todotimer.data.Objective
 import com.example.todotimer.data.TaskItem
+import com.example.todotimer.data.TimeEntry
 import com.example.todotimer.util.TimeTracking
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+
+private enum class AnalyticsPreset(val label: String) {
+    TODAY("Today"),
+    THIS_WEEK("This week"),
+    THIS_MONTH("This month"),
+    CUSTOM("Custom"),
+}
 
 private data class ActionTime(val task: TaskItem, val millis: Long)
 private data class ObjectiveTime(val objective: Objective, val millis: Long)
@@ -35,16 +60,36 @@ internal fun AnalyticsSection(
     modifier: Modifier,
     objectives: List<Objective>,
     tasks: List<TaskItem>,
+    timeEntries: List<TimeEntry>,
     nowMillis: Long,
-    onDownloadCsv: () -> Unit,
+    onDownloadCsv: (AnalyticsRange) -> Unit,
 ) {
+    val context = LocalContext.current
+    val zoneId = ZoneId.systemDefault()
+    val today = remember(nowMillis) { Instant.ofEpochMilli(nowMillis).atZone(zoneId).toLocalDate() }
+    var presetName by rememberSaveable { mutableStateOf(AnalyticsPreset.TODAY.name) }
+    var customStartEpochDay by rememberSaveable { mutableStateOf(today.toEpochDay()) }
+    var customEndEpochDay by rememberSaveable { mutableStateOf(today.toEpochDay()) }
+    val preset = AnalyticsPreset.valueOf(presetName)
+    val customStart = LocalDate.ofEpochDay(customStartEpochDay)
+    val customEnd = LocalDate.ofEpochDay(customEndEpochDay)
+    val range = remember(preset, customStartEpochDay, customEndEpochDay, nowMillis) {
+        when (preset) {
+            AnalyticsPreset.TODAY -> AnalyticsRanges.today(nowMillis, zoneId)
+            AnalyticsPreset.THIS_WEEK -> AnalyticsRanges.thisWeek(nowMillis, zoneId)
+            AnalyticsPreset.THIS_MONTH -> AnalyticsRanges.thisMonth(nowMillis, zoneId)
+            AnalyticsPreset.CUSTOM -> AnalyticsRanges.custom(customStart, customEnd, zoneId)
+        }
+    }
     val objectivesById = remember(objectives) { objectives.associateBy { it.id } }
-    val actionTimes = tasks.map { task ->
-        ActionTime(
-            task = task,
-            millis = TimeTracking.totalAt(task.trackedMillis, task.timerStartedAt, nowMillis),
-        )
-    }.sortedByDescending { it.millis }
+    val actionTimes = remember(tasks, timeEntries, range, nowMillis) {
+        tasks.map { task ->
+            ActionTime(
+                task = task,
+                millis = AnalyticsTime.loggedMillis(task, timeEntries, range, nowMillis),
+            )
+        }.sortedByDescending { it.millis }
+    }
     val loggedActions = actionTimes.filter { it.millis > 0L }
     val totalMillis = actionTimes.sumOf { it.millis }
     val objectiveTimes = objectives.map { objective ->
@@ -59,12 +104,34 @@ internal fun AnalyticsSection(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        item(key = "analytics_range") {
+            DateRangeSelector(
+                preset = preset,
+                range = range,
+                customStart = customStart,
+                customEnd = customEnd,
+                onPresetChange = { presetName = it.name },
+                onPickStart = {
+                    openDatePicker(context, customStart) { selected ->
+                        customStartEpochDay = selected.toEpochDay()
+                        if (selected.isAfter(customEnd)) customEndEpochDay = selected.toEpochDay()
+                    }
+                },
+                onPickEnd = {
+                    openDatePicker(context, customEnd) { selected ->
+                        customEndEpochDay = selected.toEpochDay()
+                        if (selected.isBefore(customStart)) customStartEpochDay = selected.toEpochDay()
+                    }
+                },
+            )
+        }
         item(key = "analytics_summary") {
             AnalyticsSummary(
+                range = range,
                 totalMillis = totalMillis,
                 loggedActions = loggedActions.size,
                 totalActions = tasks.size,
-                onDownloadCsv = onDownloadCsv,
+                onDownloadCsv = { onDownloadCsv(range) },
             )
         }
         item(key = "objective_time_heading") {
@@ -76,7 +143,7 @@ internal fun AnalyticsSection(
             )
         }
         if (objectiveTimes.isEmpty()) {
-            item(key = "no_objective_time") { NoTimeLogged() }
+            item(key = "no_objective_time") { NoTimeLogged(range.label) }
         } else {
             items(objectiveTimes, key = { "objective_time_${it.objective.id}" }) { record ->
                 Surface(
@@ -116,14 +183,14 @@ internal fun AnalyticsSection(
                     fontWeight = FontWeight.Bold,
                 )
                 Text(
-                    "Each task and subtask is reported as an action.",
+                    "Each task and subtask is reported for the selected dates.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
         if (loggedActions.isEmpty()) {
-            item(key = "no_action_time") { NoTimeLogged() }
+            item(key = "no_action_time") { NoTimeLogged(range.label) }
         } else {
             items(loggedActions, key = { "action_time_${it.task.id}" }) { record ->
                 AnalyticsActionRow(
@@ -136,7 +203,64 @@ internal fun AnalyticsSection(
 }
 
 @Composable
+private fun DateRangeSelector(
+    preset: AnalyticsPreset,
+    range: AnalyticsRange,
+    customStart: LocalDate,
+    customEnd: LocalDate,
+    onPresetChange: (AnalyticsPreset) -> Unit,
+    onPickStart: () -> Unit,
+    onPickEnd: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        shape = MaterialTheme.shapes.large,
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text("Date range", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(8.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                AnalyticsPreset.entries.forEach { option ->
+                    FilterChip(
+                        selected = preset == option,
+                        onClick = { onPresetChange(option) },
+                        label = { Text(option.label) },
+                    )
+                }
+            }
+            if (preset == AnalyticsPreset.CUSTOM) {
+                Spacer(Modifier.height(10.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedButton(onClick = onPickStart, modifier = Modifier.weight(1f)) {
+                        Text(customStart.format(shortDateFormatter))
+                    }
+                    OutlinedButton(onClick = onPickEnd, modifier = Modifier.weight(1f)) {
+                        Text(customEnd.format(shortDateFormatter))
+                    }
+                }
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(
+                formatRange(range),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
 private fun AnalyticsSummary(
+    range: AnalyticsRange,
     totalMillis: Long,
     loggedActions: Int,
     totalActions: Int,
@@ -147,7 +271,7 @@ private fun AnalyticsSummary(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
     ) {
         Column(modifier = Modifier.padding(20.dp)) {
-            Text("TOTAL TIME LOGGED", style = MaterialTheme.typography.labelMedium)
+            Text("TIME LOGGED • ${range.label.uppercase()}", style = MaterialTheme.typography.labelMedium)
             Spacer(Modifier.height(4.dp))
             Text(
                 TimeTracking.format(totalMillis),
@@ -155,19 +279,19 @@ private fun AnalyticsSummary(
                 fontWeight = FontWeight.Bold,
             )
             Text(
-                "$loggedActions of $totalActions actions have logged time",
+                "$loggedActions of $totalActions actions logged time in this range",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onPrimaryContainer,
             )
             Spacer(Modifier.height(16.dp))
             Button(
                 onClick = onDownloadCsv,
-                enabled = totalActions > 0,
+                enabled = loggedActions > 0,
                 modifier = Modifier.fillMaxWidth(),
-            ) { Text("Download CSV") }
+            ) { Text("Download filtered CSV") }
             Spacer(Modifier.height(4.dp))
             Text(
-                "Includes objectives, tags, tasks, subtasks, status, and cumulative time.",
+                "Exports only time sessions that overlap the selected dates.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onPrimaryContainer,
             )
@@ -209,17 +333,41 @@ private fun AnalyticsActionRow(record: ActionTime, objective: Objective?) {
 }
 
 @Composable
-private fun NoTimeLogged() {
+private fun NoTimeLogged(rangeLabel: String) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.surfaceContainer,
         shape = MaterialTheme.shapes.large,
     ) {
         Text(
-            "No time logged yet. Start working on a task or subtask to build analytics.",
+            "No time was logged for $rangeLabel. Choose another range or start working on an action.",
             modifier = Modifier.padding(16.dp),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
+}
+
+private fun openDatePicker(
+    context: android.content.Context,
+    initial: LocalDate,
+    onSelected: (LocalDate) -> Unit,
+) {
+    DatePickerDialog(
+        context,
+        { _, year, month, day -> onSelected(LocalDate.of(year, month + 1, day)) },
+        initial.year,
+        initial.monthValue - 1,
+        initial.dayOfMonth,
+    ).show()
+}
+
+private val shortDateFormatter = DateTimeFormatter.ofPattern("d MMM yyyy")
+
+private fun formatRange(range: AnalyticsRange): String {
+    val zoneId = ZoneId.systemDefault()
+    val start = Instant.ofEpochMilli(range.startMillis).atZone(zoneId).toLocalDate()
+    val end = Instant.ofEpochMilli(range.endExclusiveMillis - 1L).atZone(zoneId).toLocalDate()
+    return if (start == end) start.format(shortDateFormatter)
+    else "${start.format(shortDateFormatter)} – ${end.format(shortDateFormatter)}"
 }

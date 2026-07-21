@@ -35,24 +35,47 @@ import com.example.todotimer.ui.theme.TodoTimerTheme
 
 class MainActivity : ComponentActivity() {
     private val viewModel: TaskViewModel by viewModels()
+    private var launchAction by mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        launchAction = intent?.action
         enableEdgeToEdge()
         setContent {
             TodoTimerTheme {
-                TodoApp(viewModel)
+                TodoApp(
+                    viewModel = viewModel,
+                    launchAction = launchAction,
+                    onLaunchActionConsumed = { launchAction = null },
+                )
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        launchAction = intent.action
+    }
+
+    companion object {
+        const val ACTION_QUICK_ADD_TASK = "com.example.todotimer.action.QUICK_ADD_TASK"
+        const val ACTION_OPEN_ONGOING = "com.example.todotimer.action.OPEN_ONGOING"
     }
 }
 
 @Composable
-private fun TodoApp(viewModel: TaskViewModel) {
+private fun TodoApp(
+    viewModel: TaskViewModel,
+    launchAction: String?,
+    onLaunchActionConsumed: () -> Unit,
+) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val objectives by viewModel.objectives.collectAsStateWithLifecycle()
     val tasks by viewModel.tasks.collectAsStateWithLifecycle()
+    val timeEntries by viewModel.timeEntries.collectAsStateWithLifecycle()
+    val reusableTasks by viewModel.reusableTasks.collectAsStateWithLifecycle()
     var notificationAllowed by remember { mutableStateOf(context.hasNotificationPermission()) }
     var exactAlarmAllowed by remember {
         mutableStateOf(ReminderScheduler(context).hasExactAlarmAccess())
@@ -100,6 +123,10 @@ private fun TodoApp(viewModel: TaskViewModel) {
     TodoScreen(
         objectives = objectives,
         tasks = tasks,
+        timeEntries = timeEntries,
+        reusableTasks = reusableTasks,
+        launchAction = launchAction,
+        onLaunchActionConsumed = onLaunchActionConsumed,
         notificationAllowed = notificationAllowed,
         exactAlarmAllowed = exactAlarmAllowed,
         onRequestNotificationPermission = {
@@ -127,13 +154,21 @@ private fun TodoApp(viewModel: TaskViewModel) {
         onToggleTimer = viewModel::toggleTimer,
         onDeleteTask = viewModel::delete,
         onDeleteObjective = viewModel::deleteObjective,
-        onDownloadAnalytics = {
+        onSaveReusableTask = viewModel::saveReusableTask,
+        onUseReusableTask = viewModel::useReusableTask,
+        onDeleteReusableTask = viewModel::deleteReusableTask,
+        onDownloadAnalytics = { range ->
             pendingAnalyticsCsv.value = AnalyticsCsv.build(
                 objectives = objectives,
                 tasks = tasks,
+                timeEntries = timeEntries,
+                range = range,
                 nowMillis = System.currentTimeMillis(),
             )
-            analyticsExportLauncher.launch("max-delta-time-" + java.time.LocalDate.now() + ".csv")
+            analyticsExportLauncher.launch(
+                "max-delta-time-${range.label.lowercase().replace(' ', '-')}-" +
+                    java.time.LocalDate.now() + ".csv",
+            )
         },
     )
 }

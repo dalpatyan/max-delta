@@ -33,6 +33,7 @@ internal fun TaskEditorDialog(
     onDismiss: () -> Unit,
     onSave: (String, Long?) -> Unit,
     onDelete: (() -> Unit)?,
+    onSaveReusable: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     var title by remember(existing?.id, isSubtask) { mutableStateOf(existing?.title.orEmpty()) }
@@ -116,6 +117,11 @@ internal fun TaskEditorDialog(
                     Spacer(Modifier.height(8.dp))
                     TextButton(onClick = onDelete) {
                         Text("Delete", color = MaterialTheme.colorScheme.error)
+                    }
+                }
+                if (onSaveReusable != null) {
+                    TextButton(onClick = onSaveReusable) {
+                        Text("Save task and subtasks as reusable")
                     }
                 }
             }

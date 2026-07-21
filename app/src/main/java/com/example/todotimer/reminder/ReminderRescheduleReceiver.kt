@@ -19,6 +19,7 @@ class ReminderRescheduleReceiver : BroadcastReceiver() {
                 AppGraph.database(context)
                     .getUpcomingReminders(System.currentTimeMillis())
                     .forEach(scheduler::schedule)
+                AppGraph.repository(context).refresh()
             } finally {
                 pendingResult.finish()
             }

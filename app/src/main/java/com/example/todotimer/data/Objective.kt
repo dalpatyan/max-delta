@@ -5,4 +5,5 @@ data class Objective(
     val title: String,
     val tags: List<String>,
     val createdAt: Long,
+    val updatedAt: Long = createdAt,
 )

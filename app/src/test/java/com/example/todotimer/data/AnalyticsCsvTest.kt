@@ -25,9 +25,18 @@ class AnalyticsCsvTest {
             timerStartedAt = 4_000L,
         )
 
-        val csv = AnalyticsCsv.build(listOf(objective), listOf(task), nowMillis = 7_000L)
+        val range = AnalyticsRange(0L, 10_000L, "Custom")
+        val entries = listOf(TimeEntry(1L, task.id, 1_000L, 3_000L))
+        val csv = AnalyticsCsv.build(
+            objectives = listOf(objective),
+            tasks = listOf(task),
+            timeEntries = entries,
+            range = range,
+            nowMillis = 7_000L,
+        )
 
-        assertTrue(csv.startsWith("\uFEFFObjective,"))
+        assertTrue(csv.startsWith("\uFEFFDate range,"))
+        assertTrue(csv.contains("\"Custom\""))
         assertTrue(csv.contains("\"Launch, pilot\""))
         assertTrue(csv.contains("\"Professional | Q3\""))
         assertTrue(csv.contains("\"Review \"\"results\"\"\""))

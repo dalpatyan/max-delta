@@ -33,16 +33,21 @@ class TaskDatabase(context: Context) : SQLiteOpenHelper(
                 $COL_CREATED_AT INTEGER NOT NULL,
                 $COL_COMPLETED_AT INTEGER,
                 $COL_TRACKED_MILLIS INTEGER NOT NULL DEFAULT 0,
-                $COL_TIMER_STARTED_AT INTEGER
+                $COL_TIMER_STARTED_AT INTEGER,
+                $COL_UPDATED_AT INTEGER NOT NULL
             )
             """.trimIndent(),
         )
         createTaskIndexes(db)
+        createTimeEntriesTable(db)
+        createReusableTasksTable(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) migrateTasksIntoObjective(db)
         if (oldVersion < 3) addObjectiveTagsColumnIfMissing(db)
+        if (oldVersion < 4) addUpdateTrackingAndTimeEntries(db)
+        if (oldVersion < 5) createReusableTasksTable(db)
     }
 
     fun getObjectives(): List<Objective> = readableDatabase.query(
@@ -64,6 +69,7 @@ class TaskDatabase(context: Context) : SQLiteOpenHelper(
                             cursor.getString(cursor.getColumnIndexOrThrow(COL_TAGS)),
                         ),
                         createdAt = cursor.getLong(cursor.getColumnIndexOrThrow(COL_CREATED_AT)),
+                        updatedAt = cursor.getLong(cursor.getColumnIndexOrThrow(COL_UPDATED_AT)),
                     ),
                 )
             }
@@ -75,14 +81,16 @@ class TaskDatabase(context: Context) : SQLiteOpenHelper(
             put(COL_TITLE, title)
             put(COL_TAGS, ObjectiveTags.encode(tags))
             put(COL_CREATED_AT, nowMillis)
+            put(COL_UPDATED_AT, nowMillis)
         }
         return writableDatabase.insertOrThrow(TABLE_OBJECTIVES, null, values)
     }
 
-    fun updateObjective(id: Long, title: String, tags: List<String>) {
+    fun updateObjective(id: Long, title: String, tags: List<String>, nowMillis: Long) {
         val values = ContentValues().apply {
             put(COL_TITLE, title)
             put(COL_TAGS, ObjectiveTags.encode(tags))
+            put(COL_UPDATED_AT, nowMillis)
         }
         writableDatabase.update(TABLE_OBJECTIVES, values, "$COL_ID = ?", arrayOf(id.toString()))
     }
@@ -111,6 +119,165 @@ class TaskDatabase(context: Context) : SQLiteOpenHelper(
         "$COL_IS_DONE ASC, $COL_CREATED_AT DESC",
     ).use { cursor -> cursor.readTasks() }
 
+    fun getTimeEntries(): List<TimeEntry> = readableDatabase.query(
+        TABLE_TIME_ENTRIES,
+        TIME_ENTRY_COLUMNS,
+        null,
+        null,
+        null,
+        null,
+        "$COL_ENTRY_STARTED_AT ASC",
+    ).use { cursor ->
+        buildList {
+            while (cursor.moveToNext()) {
+                add(
+                    TimeEntry(
+                        id = cursor.getLong(cursor.getColumnIndexOrThrow(COL_ID)),
+                        taskId = cursor.getLong(cursor.getColumnIndexOrThrow(COL_ENTRY_TASK_ID)),
+                        startedAt = cursor.getLong(cursor.getColumnIndexOrThrow(COL_ENTRY_STARTED_AT)),
+                        endedAt = cursor.getLong(cursor.getColumnIndexOrThrow(COL_ENTRY_ENDED_AT)),
+                    ),
+                )
+            }
+        }
+    }
+
+    fun getReusableTasks(): List<ReusableTask> = readableDatabase.query(
+        TABLE_REUSABLE_TASKS,
+        REUSABLE_TASK_COLUMNS,
+        null,
+        null,
+        null,
+        null,
+        "$COL_CREATED_AT DESC",
+    ).use { cursor ->
+        buildList {
+            while (cursor.moveToNext()) {
+                add(
+                    ReusableTask(
+                        id = cursor.getLong(cursor.getColumnIndexOrThrow(COL_ID)),
+                        title = cursor.getString(cursor.getColumnIndexOrThrow(COL_TITLE)),
+                        subtaskTitles = ReusableTaskCodec.decode(
+                            cursor.getString(cursor.getColumnIndexOrThrow(COL_TEMPLATE_SUBTASKS)),
+                        ),
+                        createdAt = cursor.getLong(cursor.getColumnIndexOrThrow(COL_CREATED_AT)),
+                    ),
+                )
+            }
+        }
+    }
+
+    fun saveReusableTask(taskId: Long, nowMillis: Long): Long {
+        val task = findById(taskId) ?: error("Task not found")
+        require(task.parentTaskId == null) { "Only top-level tasks can become reusable" }
+        val subtaskTitles = readableDatabase.query(
+            TABLE_TASKS,
+            arrayOf(COL_TITLE),
+            "$COL_PARENT_ID = ?",
+            arrayOf(taskId.toString()),
+            null,
+            null,
+            "$COL_CREATED_AT ASC",
+        ).use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.getString(0)) } }
+        val values = ContentValues().apply {
+            put(COL_TITLE, task.title)
+            put(COL_TEMPLATE_SUBTASKS, ReusableTaskCodec.encode(subtaskTitles))
+            put(COL_CREATED_AT, nowMillis)
+        }
+        return writableDatabase.insertOrThrow(TABLE_REUSABLE_TASKS, null, values)
+    }
+
+    fun instantiateReusableTask(
+        reusableTaskId: Long,
+        objectiveId: Long,
+        nowMillis: Long,
+    ): List<Long> {
+        val reusableTask = readableDatabase.query(
+            TABLE_REUSABLE_TASKS,
+            REUSABLE_TASK_COLUMNS,
+            "$COL_ID = ?",
+            arrayOf(reusableTaskId.toString()),
+            null,
+            null,
+            null,
+            "1",
+        ).use { cursor ->
+            if (!cursor.moveToFirst()) return emptyList()
+            ReusableTask(
+                id = cursor.getLong(cursor.getColumnIndexOrThrow(COL_ID)),
+                title = cursor.getString(cursor.getColumnIndexOrThrow(COL_TITLE)),
+                subtaskTitles = ReusableTaskCodec.decode(
+                    cursor.getString(cursor.getColumnIndexOrThrow(COL_TEMPLATE_SUBTASKS)),
+                ),
+                createdAt = cursor.getLong(cursor.getColumnIndexOrThrow(COL_CREATED_AT)),
+            )
+        }
+        val db = writableDatabase
+        val insertedIds = mutableListOf<Long>()
+        db.beginTransaction()
+        try {
+            val parentId = insertTask(db, objectiveId, reusableTask.title, null, null, nowMillis)
+            insertedIds += parentId
+            reusableTask.subtaskTitles.forEachIndexed { index, title ->
+                insertedIds += insertTask(
+                    db = db,
+                    objectiveId = objectiveId,
+                    title = title,
+                    parentTaskId = parentId,
+                    reminderAt = null,
+                    nowMillis = nowMillis + index + 1L,
+                )
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        return insertedIds
+    }
+
+    fun deleteReusableTask(id: Long) {
+        writableDatabase.delete(TABLE_REUSABLE_TASKS, "$COL_ID = ?", arrayOf(id.toString()))
+    }
+
+    fun getPendingTaskCount(): Int = DatabaseUtils.longForQuery(
+        readableDatabase,
+        "SELECT COUNT(*) FROM $TABLE_TASKS WHERE $COL_IS_DONE = 0",
+        null,
+    ).toInt()
+
+    fun getPendingTaskSummaries(limit: Int): List<PendingTaskSummary> = readableDatabase.rawQuery(
+        """
+        SELECT t.$COL_ID, t.$COL_TITLE, o.$COL_TITLE AS objective_title,
+               t.$COL_PARENT_ID, t.$COL_REMINDER_AT
+        FROM $TABLE_TASKS t
+        INNER JOIN $TABLE_OBJECTIVES o ON o.$COL_ID = t.$COL_OBJECTIVE_ID
+        WHERE t.$COL_IS_DONE = 0
+        ORDER BY CASE
+                     WHEN t.$COL_TIMER_STARTED_AT IS NOT NULL THEN 0
+                     WHEN t.$COL_REMINDER_AT IS NOT NULL THEN 1
+                     ELSE 2
+                 END,
+                 t.$COL_REMINDER_AT ASC,
+                 t.$COL_UPDATED_AT DESC
+        LIMIT ?
+        """.trimIndent(),
+        arrayOf(limit.toString()),
+    ).use { cursor ->
+        buildList {
+            while (cursor.moveToNext()) {
+                add(
+                    PendingTaskSummary(
+                        id = cursor.getLong(0),
+                        title = cursor.getString(1),
+                        objectiveTitle = cursor.getString(2),
+                        isSubtask = !cursor.isNull(3),
+                        reminderAt = if (cursor.isNull(4)) null else cursor.getLong(4),
+                    ),
+                )
+            }
+        }
+    }
+
     fun findById(id: Long): TaskItem? = findById(readableDatabase, id)
 
     fun getUpcomingReminders(nowMillis: Long): List<TaskItem> = readableDatabase.query(
@@ -129,6 +296,22 @@ class TaskDatabase(context: Context) : SQLiteOpenHelper(
         parentTaskId: Long?,
         reminderAt: Long?,
         nowMillis: Long,
+    ): Long = insertTask(
+        db = writableDatabase,
+        objectiveId = objectiveId,
+        title = title,
+        parentTaskId = parentTaskId,
+        reminderAt = reminderAt,
+        nowMillis = nowMillis,
+    )
+
+    private fun insertTask(
+        db: SQLiteDatabase,
+        objectiveId: Long,
+        title: String,
+        parentTaskId: Long?,
+        reminderAt: Long?,
+        nowMillis: Long,
     ): Long {
         val values = ContentValues().apply {
             put(COL_OBJECTIVE_ID, objectiveId)
@@ -136,14 +319,16 @@ class TaskDatabase(context: Context) : SQLiteOpenHelper(
             putNullableLong(COL_PARENT_ID, parentTaskId)
             putNullableLong(COL_REMINDER_AT, reminderAt)
             put(COL_CREATED_AT, nowMillis)
+            put(COL_UPDATED_AT, nowMillis)
         }
-        return writableDatabase.insertOrThrow(TABLE_TASKS, null, values)
+        return db.insertOrThrow(TABLE_TASKS, null, values)
     }
 
-    fun update(id: Long, title: String, reminderAt: Long?) {
+    fun update(id: Long, title: String, reminderAt: Long?, nowMillis: Long) {
         val values = ContentValues().apply {
             put(COL_TITLE, title)
             putNullableLong(COL_REMINDER_AT, reminderAt)
+            put(COL_UPDATED_AT, nowMillis)
         }
         writableDatabase.update(TABLE_TASKS, values, "$COL_ID = ?", arrayOf(id.toString()))
     }
@@ -174,6 +359,7 @@ class TaskDatabase(context: Context) : SQLiteOpenHelper(
                 val values = ContentValues().apply {
                     put(COL_IS_DONE, if (done) 1 else 0)
                     if (done) {
+                        recordRunningSession(db, current, nowMillis)
                         put(
                             COL_TRACKED_MILLIS,
                             TimeTracking.totalAt(
@@ -187,6 +373,7 @@ class TaskDatabase(context: Context) : SQLiteOpenHelper(
                     } else {
                         putNull(COL_COMPLETED_AT)
                     }
+                    put(COL_UPDATED_AT, nowMillis)
                 }
                 db.update(TABLE_TASKS, values, "$COL_ID = ?", arrayOf(affectedId.toString()))
             }
@@ -211,6 +398,7 @@ class TaskDatabase(context: Context) : SQLiteOpenHelper(
                 null,
             ).use { cursor ->
                 cursor.readTasks().forEach { runningTask ->
+                    recordRunningSession(db, runningTask, nowMillis)
                     val values = ContentValues().apply {
                         put(
                             COL_TRACKED_MILLIS,
@@ -221,6 +409,7 @@ class TaskDatabase(context: Context) : SQLiteOpenHelper(
                             ),
                         )
                         putNull(COL_TIMER_STARTED_AT)
+                        put(COL_UPDATED_AT, nowMillis)
                     }
                     db.update(TABLE_TASKS, values, "$COL_ID = ?", arrayOf(runningTask.id.toString()))
                 }
@@ -228,7 +417,10 @@ class TaskDatabase(context: Context) : SQLiteOpenHelper(
 
             val target = findById(db, id)
             if (target != null && !target.isDone) {
-                val values = ContentValues().apply { put(COL_TIMER_STARTED_AT, nowMillis) }
+                val values = ContentValues().apply {
+                    put(COL_TIMER_STARTED_AT, nowMillis)
+                    put(COL_UPDATED_AT, nowMillis)
+                }
                 db.update(TABLE_TASKS, values, "$COL_ID = ?", arrayOf(id.toString()))
             }
             db.setTransactionSuccessful()
@@ -239,20 +431,28 @@ class TaskDatabase(context: Context) : SQLiteOpenHelper(
 
     fun stopTimer(id: Long, nowMillis: Long) {
         val db = writableDatabase
-        val current = findById(db, id) ?: return
-        if (current.timerStartedAt == null) return
-        val values = ContentValues().apply {
-            put(
-                COL_TRACKED_MILLIS,
-                TimeTracking.totalAt(
-                    current.trackedMillis,
-                    current.timerStartedAt,
-                    nowMillis,
-                ),
-            )
-            putNull(COL_TIMER_STARTED_AT)
+        db.beginTransaction()
+        try {
+            val current = findById(db, id) ?: return
+            if (current.timerStartedAt == null) return
+            recordRunningSession(db, current, nowMillis)
+            val values = ContentValues().apply {
+                put(
+                    COL_TRACKED_MILLIS,
+                    TimeTracking.totalAt(
+                        current.trackedMillis,
+                        current.timerStartedAt,
+                        nowMillis,
+                    ),
+                )
+                putNull(COL_TIMER_STARTED_AT)
+                put(COL_UPDATED_AT, nowMillis)
+            }
+            db.update(TABLE_TASKS, values, "$COL_ID = ?", arrayOf(id.toString()))
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
         }
-        db.update(TABLE_TASKS, values, "$COL_ID = ?", arrayOf(id.toString()))
     }
 
     fun getItemAndChildIds(id: Long): List<Long> {
@@ -271,6 +471,18 @@ class TaskDatabase(context: Context) : SQLiteOpenHelper(
 
     fun delete(id: Long) {
         writableDatabase.delete(TABLE_TASKS, "$COL_ID = ?", arrayOf(id.toString()))
+    }
+
+    private fun recordRunningSession(db: SQLiteDatabase, task: TaskItem, nowMillis: Long) {
+        val startedAt = task.timerStartedAt ?: return
+        val endedAt = nowMillis.coerceAtLeast(startedAt)
+        if (endedAt <= startedAt) return
+        val values = ContentValues().apply {
+            put(COL_ENTRY_TASK_ID, task.id)
+            put(COL_ENTRY_STARTED_AT, startedAt)
+            put(COL_ENTRY_ENDED_AT, endedAt)
+        }
+        db.insertOrThrow(TABLE_TIME_ENTRIES, null, values)
     }
 
     private fun findById(db: SQLiteDatabase, id: Long): TaskItem? = db.query(
@@ -299,6 +511,7 @@ class TaskDatabase(context: Context) : SQLiteOpenHelper(
         completedAt = getNullableLong(COL_COMPLETED_AT),
         trackedMillis = getLong(getColumnIndexOrThrow(COL_TRACKED_MILLIS)),
         timerStartedAt = getNullableLong(COL_TIMER_STARTED_AT),
+        updatedAt = getLong(getColumnIndexOrThrow(COL_UPDATED_AT)),
     )
 
     private fun Cursor.getNullableLong(columnName: String): Long? {
@@ -317,7 +530,8 @@ class TaskDatabase(context: Context) : SQLiteOpenHelper(
                 $COL_ID INTEGER PRIMARY KEY AUTOINCREMENT,
                 $COL_TITLE TEXT NOT NULL,
                 $COL_TAGS TEXT NOT NULL DEFAULT '',
-                $COL_CREATED_AT INTEGER NOT NULL
+                $COL_CREATED_AT INTEGER NOT NULL,
+                $COL_UPDATED_AT INTEGER NOT NULL
             )
             """.trimIndent(),
         )
@@ -327,6 +541,36 @@ class TaskDatabase(context: Context) : SQLiteOpenHelper(
         db.execSQL("CREATE INDEX index_tasks_objective_id ON $TABLE_TASKS($COL_OBJECTIVE_ID)")
         db.execSQL("CREATE INDEX index_tasks_parent_id ON $TABLE_TASKS($COL_PARENT_ID)")
         db.execSQL("CREATE INDEX index_tasks_reminder_at ON $TABLE_TASKS($COL_REMINDER_AT)")
+    }
+
+    private fun createTimeEntriesTable(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS $TABLE_TIME_ENTRIES (
+                $COL_ID INTEGER PRIMARY KEY AUTOINCREMENT,
+                $COL_ENTRY_TASK_ID INTEGER NOT NULL REFERENCES $TABLE_TASKS($COL_ID) ON DELETE CASCADE,
+                $COL_ENTRY_STARTED_AT INTEGER NOT NULL,
+                $COL_ENTRY_ENDED_AT INTEGER NOT NULL
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS index_time_entries_task_id " +
+                "ON $TABLE_TIME_ENTRIES($COL_ENTRY_TASK_ID)",
+        )
+    }
+
+    private fun createReusableTasksTable(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS $TABLE_REUSABLE_TASKS (
+                $COL_ID INTEGER PRIMARY KEY AUTOINCREMENT,
+                $COL_TITLE TEXT NOT NULL,
+                $COL_TEMPLATE_SUBTASKS TEXT NOT NULL DEFAULT '',
+                $COL_CREATED_AT INTEGER NOT NULL
+            )
+            """.trimIndent(),
+        )
     }
 
     private fun migrateTasksIntoObjective(db: SQLiteDatabase) {
@@ -339,6 +583,7 @@ class TaskDatabase(context: Context) : SQLiteOpenHelper(
             val values = ContentValues().apply {
                 put(COL_TITLE, "Imported tasks")
                 put(COL_CREATED_AT, System.currentTimeMillis())
+                put(COL_UPDATED_AT, System.currentTimeMillis())
             }
             val objectiveId = db.insertOrThrow(TABLE_OBJECTIVES, null, values)
             val taskValues = ContentValues().apply { put(COL_OBJECTIVE_ID, objectiveId) }
@@ -348,29 +593,72 @@ class TaskDatabase(context: Context) : SQLiteOpenHelper(
     }
 
     private fun addObjectiveTagsColumnIfMissing(db: SQLiteDatabase) {
-        val hasTagsColumn = db.rawQuery("PRAGMA table_info($TABLE_OBJECTIVES)", null).use { cursor ->
-            val nameIndex = cursor.getColumnIndexOrThrow("name")
-            var found = false
-            while (cursor.moveToNext()) {
-                if (cursor.getString(nameIndex) == COL_TAGS) {
-                    found = true
-                    break
-                }
-            }
-            found
-        }
-        if (!hasTagsColumn) {
+        if (!hasColumn(db, TABLE_OBJECTIVES, COL_TAGS)) {
             db.execSQL(
                 "ALTER TABLE $TABLE_OBJECTIVES ADD COLUMN $COL_TAGS TEXT NOT NULL DEFAULT ''",
             )
         }
     }
 
+    private fun addUpdateTrackingAndTimeEntries(db: SQLiteDatabase) {
+        if (!hasColumn(db, TABLE_OBJECTIVES, COL_UPDATED_AT)) {
+            db.execSQL(
+                "ALTER TABLE $TABLE_OBJECTIVES ADD COLUMN $COL_UPDATED_AT " +
+                    "INTEGER NOT NULL DEFAULT 0",
+            )
+            db.execSQL(
+                "UPDATE $TABLE_OBJECTIVES SET $COL_UPDATED_AT = $COL_CREATED_AT " +
+                    "WHERE $COL_UPDATED_AT = 0",
+            )
+        }
+        if (!hasColumn(db, TABLE_TASKS, COL_UPDATED_AT)) {
+            db.execSQL(
+                "ALTER TABLE $TABLE_TASKS ADD COLUMN $COL_UPDATED_AT " +
+                    "INTEGER NOT NULL DEFAULT 0",
+            )
+            db.execSQL(
+                "UPDATE $TABLE_TASKS SET $COL_UPDATED_AT = " +
+                    "COALESCE($COL_COMPLETED_AT, $COL_TIMER_STARTED_AT, $COL_CREATED_AT) " +
+                    "WHERE $COL_UPDATED_AT = 0",
+            )
+        }
+        createTimeEntriesTable(db)
+        db.execSQL(
+            """
+            INSERT INTO $TABLE_TIME_ENTRIES (
+                $COL_ENTRY_TASK_ID,
+                $COL_ENTRY_STARTED_AT,
+                $COL_ENTRY_ENDED_AT
+            )
+            SELECT $COL_ID,
+                   MAX(0, $COL_UPDATED_AT - $COL_TRACKED_MILLIS),
+                   $COL_UPDATED_AT
+            FROM $TABLE_TASKS
+            WHERE $COL_TRACKED_MILLIS > 0
+            """.trimIndent(),
+        )
+    }
+
+    private fun hasColumn(db: SQLiteDatabase, table: String, column: String): Boolean =
+        db.rawQuery("PRAGMA table_info($table)", null).use { cursor ->
+            val nameIndex = cursor.getColumnIndexOrThrow("name")
+            var found = false
+            while (cursor.moveToNext()) {
+                if (cursor.getString(nameIndex) == column) {
+                    found = true
+                    break
+                }
+            }
+            found
+        }
+
     private companion object {
         const val DATABASE_NAME = "todo_timer.db"
-        const val DATABASE_VERSION = 3
+        const val DATABASE_VERSION = 5
         const val TABLE_OBJECTIVES = "objectives"
         const val TABLE_TASKS = "tasks"
+        const val TABLE_TIME_ENTRIES = "time_entries"
+        const val TABLE_REUSABLE_TASKS = "reusable_tasks"
         const val COL_ID = "id"
         const val COL_OBJECTIVE_ID = "objective_id"
         const val COL_PARENT_ID = "parent_id"
@@ -382,7 +670,18 @@ class TaskDatabase(context: Context) : SQLiteOpenHelper(
         const val COL_COMPLETED_AT = "completed_at"
         const val COL_TRACKED_MILLIS = "tracked_millis"
         const val COL_TIMER_STARTED_AT = "timer_started_at"
-        val OBJECTIVE_COLUMNS = arrayOf(COL_ID, COL_TITLE, COL_TAGS, COL_CREATED_AT)
+        const val COL_UPDATED_AT = "updated_at"
+        const val COL_ENTRY_TASK_ID = "task_id"
+        const val COL_ENTRY_STARTED_AT = "started_at"
+        const val COL_ENTRY_ENDED_AT = "ended_at"
+        const val COL_TEMPLATE_SUBTASKS = "subtasks"
+        val OBJECTIVE_COLUMNS = arrayOf(
+            COL_ID,
+            COL_TITLE,
+            COL_TAGS,
+            COL_CREATED_AT,
+            COL_UPDATED_AT,
+        )
         val TASK_COLUMNS = arrayOf(
             COL_ID,
             COL_OBJECTIVE_ID,
@@ -394,6 +693,19 @@ class TaskDatabase(context: Context) : SQLiteOpenHelper(
             COL_COMPLETED_AT,
             COL_TRACKED_MILLIS,
             COL_TIMER_STARTED_AT,
+            COL_UPDATED_AT,
+        )
+        val TIME_ENTRY_COLUMNS = arrayOf(
+            COL_ID,
+            COL_ENTRY_TASK_ID,
+            COL_ENTRY_STARTED_AT,
+            COL_ENTRY_ENDED_AT,
+        )
+        val REUSABLE_TASK_COLUMNS = arrayOf(
+            COL_ID,
+            COL_TITLE,
+            COL_TEMPLATE_SUBTASKS,
+            COL_CREATED_AT,
         )
     }
 }

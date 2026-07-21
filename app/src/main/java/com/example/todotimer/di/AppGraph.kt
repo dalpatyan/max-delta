@@ -4,6 +4,7 @@ import android.content.Context
 import com.example.todotimer.data.TaskDatabase
 import com.example.todotimer.data.TaskRepository
 import com.example.todotimer.reminder.ReminderScheduler
+import com.example.todotimer.system.TaskStateNotifier
 
 object AppGraph {
     @Volatile
@@ -22,6 +23,7 @@ object AppGraph {
         repositoryInstance ?: TaskRepository(
             database = database(context),
             reminderScheduler = ReminderScheduler(context.applicationContext),
+            taskStateNotifier = TaskStateNotifier(context.applicationContext),
         ).also {
             repositoryInstance = it
         }
