@@ -2,4 +2,10 @@
     <string name="app_name">Max Δ</string>
     <string name="reminder_channel_name">Task reminders</string>
     <string name="reminder_channel_description">Notifications for task and subtask reminders</string>
+    <string name="timer_channel_name">Active task timer</string>
+    <string name="timer_channel_description">Persistent progress while a task timer is running</string>
+    <string name="routine_channel_name">Routine reminders</string>
+    <string name="routine_channel_description">Notifications when a scheduled routine is ready to start</string>
+    <string name="pending_widget_description">View pending Max Delta tasks</string>
+    <string name="add_task_widget_description">Quickly add a Max Delta task</string>
 </resources>

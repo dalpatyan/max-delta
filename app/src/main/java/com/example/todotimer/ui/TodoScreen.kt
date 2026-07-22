@@ -1,6 +1,9 @@
 package com.example.todotimer.ui
 
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CenterAlignedTopAppBar
@@ -21,15 +24,27 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
+import com.example.todotimer.MainActivity
+import com.example.todotimer.data.AnalyticsRange
 import com.example.todotimer.data.Objective
 import com.example.todotimer.data.ObjectiveVisibility
+import com.example.todotimer.data.ReusableTask
+import com.example.todotimer.data.Routine
+import com.example.todotimer.data.RoutineFrequency
+import com.example.todotimer.data.RoutineProgress
 import com.example.todotimer.data.TaskItem
+import com.example.todotimer.data.TimeEntry
 import com.example.todotimer.util.TimeTracking
 import kotlinx.coroutines.delay
 
 private enum class AppSection(val label: String, val symbol: String) {
     OBJECTIVES("Objectives", "◎"),
+    ROUTINES("Routines", "↻"),
     ONGOING("Ongoing", "▶"),
     ANALYTICS("Analytics", "Σ"),
 }
@@ -41,12 +56,19 @@ private data class TaskEditorTarget(
 )
 
 private data class ObjectiveEditorTarget(val objective: Objective?)
+private data class RoutineEditorTarget(val routine: Routine?)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TodoScreen(
     objectives: List<Objective>,
     tasks: List<TaskItem>,
+    timeEntries: List<TimeEntry>,
+    reusableTasks: List<ReusableTask>,
+    routines: List<Routine>,
+    routineProgress: RoutineProgress?,
+    launchAction: String?,
+    onLaunchActionConsumed: () -> Unit,
     notificationAllowed: Boolean,
     exactAlarmAllowed: Boolean,
     onRequestNotificationPermission: () -> Unit,
@@ -57,14 +79,25 @@ fun TodoScreen(
     onToggleTimer: (TaskItem) -> Unit,
     onDeleteTask: (TaskItem) -> Unit,
     onDeleteObjective: (Objective) -> Unit,
-    onDownloadAnalytics: () -> Unit,
+    onSaveReusableTask: (TaskItem) -> Unit,
+    onUseReusableTask: (ReusableTask, Objective) -> Unit,
+    onDeleteReusableTask: (ReusableTask) -> Unit,
+    onSaveRoutine: (Long?, String, RoutineFrequency, Long, List<Long>) -> Unit,
+    onSetRoutineEnabled: (Routine, Boolean) -> Unit,
+    onStartRoutine: (RoutineProgress) -> Unit,
+    onDownloadAnalytics: (AnalyticsRange) -> Unit,
 ) {
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
     var sectionName by rememberSaveable { mutableStateOf(AppSection.OBJECTIVES.name) }
     val currentSection = AppSection.valueOf(sectionName)
     var taskEditorTarget by remember { mutableStateOf<TaskEditorTarget?>(null) }
     var objectiveEditorTarget by remember { mutableStateOf<ObjectiveEditorTarget?>(null) }
     var taskDeleteTarget by remember { mutableStateOf<TaskItem?>(null) }
     var objectiveDeleteTarget by remember { mutableStateOf<Objective?>(null) }
+    var reusableObjective by remember { mutableStateOf<Objective?>(null) }
+    var routineEditorTarget by remember { mutableStateOf<RoutineEditorTarget?>(null) }
+    var quickAddVisible by remember { mutableStateOf(false) }
     val nowMillis by produceState(initialValue = System.currentTimeMillis()) {
         while (true) {
             value = System.currentTimeMillis()
@@ -82,11 +115,37 @@ fun TodoScreen(
     val subtitle = when (currentSection) {
         AppSection.OBJECTIVES ->
             "${objectives.size - completedObjectives} open • $completedObjectives closed"
+        AppSection.ROUTINES -> "${routines.count { it.isEnabled }} scheduled • ${routines.size} total"
         AppSection.ONGOING -> "$activeActions active • $openActions unfinished"
         AppSection.ANALYTICS -> TimeTracking.format(totalLogged) + " logged"
     }
 
+    androidx.compose.runtime.LaunchedEffect(launchAction) {
+        when (launchAction) {
+            MainActivity.ACTION_QUICK_ADD_TASK -> {
+                sectionName = AppSection.OBJECTIVES.name
+                quickAddVisible = true
+                onLaunchActionConsumed()
+            }
+            MainActivity.ACTION_OPEN_ONGOING -> {
+                sectionName = AppSection.ONGOING.name
+                onLaunchActionConsumed()
+            }
+            MainActivity.ACTION_OPEN_ROUTINES -> {
+                sectionName = AppSection.ROUTINES.name
+                onLaunchActionConsumed()
+            }
+        }
+    }
+
     Scaffold(
+        modifier = Modifier.pointerInput(focusManager, keyboardController) {
+            awaitEachGesture {
+                awaitFirstDown(pass = PointerEventPass.Initial)
+                focusManager.clearFocus()
+                keyboardController?.hide()
+            }
+        },
         topBar = {
             CenterAlignedTopAppBar(
                 title = {
@@ -114,10 +173,17 @@ fun TodoScreen(
             }
         },
         floatingActionButton = {
-            if (currentSection == AppSection.OBJECTIVES) {
+            if (currentSection == AppSection.OBJECTIVES || currentSection == AppSection.ROUTINES) {
                 ExtendedFloatingActionButton(
-                    onClick = { objectiveEditorTarget = ObjectiveEditorTarget(objective = null) },
-                ) { Text("Add objective") }
+                    modifier = Modifier.imePadding(),
+                    onClick = {
+                        if (currentSection == AppSection.OBJECTIVES) {
+                            objectiveEditorTarget = ObjectiveEditorTarget(objective = null)
+                        } else {
+                            routineEditorTarget = RoutineEditorTarget(routine = null)
+                        }
+                    },
+                ) { Text(if (currentSection == AppSection.OBJECTIVES) "Add objective" else "Add routine") }
             }
         },
     ) { innerPadding ->
@@ -126,6 +192,7 @@ fun TodoScreen(
                 modifier = Modifier.padding(innerPadding),
                 objectives = objectives,
                 tasks = tasks,
+                reusableTasks = reusableTasks,
                 nowMillis = nowMillis,
                 notificationAllowed = notificationAllowed,
                 exactAlarmAllowed = exactAlarmAllowed,
@@ -157,6 +224,17 @@ fun TodoScreen(
                 onEditObjective = { objective ->
                     objectiveEditorTarget = ObjectiveEditorTarget(objective)
                 },
+                onOpenReusableTasks = { objective -> reusableObjective = objective },
+            )
+
+            AppSection.ROUTINES -> RoutineSection(
+                modifier = Modifier.padding(innerPadding),
+                routines = routines,
+                routineProgress = routineProgress,
+                tasks = tasks,
+                onEdit = { routine -> routineEditorTarget = RoutineEditorTarget(routine) },
+                onSetEnabled = onSetRoutineEnabled,
+                onStartRoutine = onStartRoutine,
             )
 
             AppSection.ONGOING -> OngoingSection(
@@ -179,6 +257,9 @@ fun TodoScreen(
                 modifier = Modifier.padding(innerPadding),
                 objectives = objectives,
                 tasks = tasks,
+                timeEntries = timeEntries,
+                routines = routines,
+                routineProgress = routineProgress,
                 nowMillis = nowMillis,
                 onDownloadCsv = onDownloadAnalytics,
             )
@@ -222,6 +303,51 @@ fun TodoScreen(
                     taskEditorTarget = null
                     taskDeleteTarget = task
                 }
+            },
+            onSaveReusable = target.task
+                ?.takeIf { target.parentTaskId == null }
+                ?.let { task ->
+                    {
+                        onSaveReusableTask(task)
+                        taskEditorTarget = null
+                    }
+                },
+        )
+    }
+
+    reusableObjective?.let { objective ->
+        ReusableTaskDialog(
+            objective = objective,
+            reusableTasks = reusableTasks,
+            onDismiss = { reusableObjective = null },
+            onUse = { reusableTask ->
+                onUseReusableTask(reusableTask, objective)
+                reusableObjective = null
+            },
+            onDelete = onDeleteReusableTask,
+        )
+    }
+
+    if (quickAddVisible) {
+        QuickAddTaskDialog(
+            objectives = objectives,
+            onDismiss = { quickAddVisible = false },
+            onSave = { objective, title ->
+                onSaveTask(null, objective.id, null, title, null)
+                quickAddVisible = false
+            },
+        )
+    }
+
+    routineEditorTarget?.let { target ->
+        RoutineEditorDialog(
+            existing = target.routine,
+            objectives = objectives,
+            tasks = tasks,
+            onDismiss = { routineEditorTarget = null },
+            onSave = { name, frequency, nextRunAt, taskIds ->
+                onSaveRoutine(target.routine?.id, name, frequency, nextRunAt, taskIds)
+                routineEditorTarget = null
             },
         )
     }

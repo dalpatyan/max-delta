@@ -38,6 +38,8 @@ internal fun ObjectiveCard(
     onAddSubtask: (TaskItem) -> Unit,
     onEditTask: (TaskItem) -> Unit,
     onEditObjective: () -> Unit,
+    hasReusableTasks: Boolean,
+    onOpenReusableTasks: () -> Unit,
     showClosed: Boolean,
 ) {
     val completedTasks = tasks.count { it.isDone }
@@ -101,7 +103,12 @@ internal fun ObjectiveCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                TextButton(onClick = onAddTask) { Text("Add task") }
+                Row {
+                    TextButton(onClick = onAddTask) { Text("Add task") }
+                    TextButton(onClick = onOpenReusableTasks) {
+                        Text(if (hasReusableTasks) "Reusable" else "Templates")
+                    }
+                }
                 TextButton(onClick = onEditObjective) { Text("Edit objective") }
             }
 

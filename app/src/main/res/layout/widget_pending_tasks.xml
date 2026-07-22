@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/pending_widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/widget_background"
+    android:orientation="vertical"
+    android:padding="14dp">
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Max Δ • Pending"
+        android:textColor="#182033"
+        android:textSize="17sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/pending_task_count"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="6dp"
+        android:textColor="#5B6475"
+        android:textSize="12sp" />
+
+    <TextView
+        android:id="@+id/pending_empty"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingVertical="8dp"
+        android:text="Nothing pending — nicely done."
+        android:textColor="#5B6475"
+        android:textSize="14sp" />
+
+    <TextView android:id="@+id/pending_task_1" style="@style/WidgetPendingRow" />
+    <TextView android:id="@+id/pending_task_2" style="@style/WidgetPendingRow" />
+    <TextView android:id="@+id/pending_task_3" style="@style/WidgetPendingRow" />
+    <TextView android:id="@+id/pending_task_4" style="@style/WidgetPendingRow" />
+    <TextView android:id="@+id/pending_task_5" style="@style/WidgetPendingRow" />
+</LinearLayout>

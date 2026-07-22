@@ -18,7 +18,8 @@
 
         <activity
             android:name=".MainActivity"
-            android:exported="true">
+            android:exported="true"
+            android:launchMode="singleTop">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -28,6 +29,36 @@
         <receiver
             android:name=".reminder.ReminderReceiver"
             android:exported="false" />
+
+        <receiver
+            android:name=".reminder.TimerActionReceiver"
+            android:exported="false" />
+
+        <receiver
+            android:name=".reminder.RoutineAlarmReceiver"
+            android:exported="false" />
+
+        <receiver
+            android:name=".widget.PendingTasksWidgetProvider"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/pending_tasks_widget_info" />
+        </receiver>
+
+        <receiver
+            android:name=".widget.AddTaskWidgetProvider"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/add_task_widget_info" />
+        </receiver>
 
         <receiver
             android:name=".reminder.ReminderRescheduleReceiver"

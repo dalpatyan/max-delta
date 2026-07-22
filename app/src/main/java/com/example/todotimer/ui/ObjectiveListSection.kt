@@ -34,7 +34,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.todotimer.data.Objective
 import com.example.todotimer.data.ObjectiveFilter
+import com.example.todotimer.data.ObjectiveSortOrder
+import com.example.todotimer.data.ObjectiveSorter
 import com.example.todotimer.data.ObjectiveVisibility
+import com.example.todotimer.data.ReusableTask
 import com.example.todotimer.data.TaskItem
 import java.util.Locale
 
@@ -43,6 +46,7 @@ internal fun ObjectiveListSection(
     modifier: Modifier,
     objectives: List<Objective>,
     tasks: List<TaskItem>,
+    reusableTasks: List<ReusableTask>,
     nowMillis: Long,
     notificationAllowed: Boolean,
     exactAlarmAllowed: Boolean,
@@ -54,11 +58,18 @@ internal fun ObjectiveListSection(
     onAddSubtask: (Objective, TaskItem) -> Unit,
     onEditTask: (TaskItem) -> Unit,
     onEditObjective: (Objective) -> Unit,
+    onOpenReusableTasks: (Objective) -> Unit,
 ) {
     var searchQuery by rememberSaveable { mutableStateOf("") }
     var selectedTag by rememberSaveable { mutableStateOf<String?>(null) }
     var showClosed by rememberSaveable { mutableStateOf(false) }
-    val sortedObjectives = remember(objectives) { objectives.sortedByDescending { it.createdAt } }
+    var sortOrderName by rememberSaveable {
+        mutableStateOf(ObjectiveSortOrder.RECENTLY_ADDED.name)
+    }
+    val sortOrder = ObjectiveSortOrder.valueOf(sortOrderName)
+    val sortedObjectives = remember(objectives, tasks, sortOrder, nowMillis) {
+        ObjectiveSorter.sort(objectives, tasks, sortOrder, nowMillis)
+    }
     val closedObjectiveCount = remember(objectives, tasks) {
         objectives.count { ObjectiveVisibility.isClosed(it.id, tasks) }
     }
@@ -121,6 +132,8 @@ internal fun ObjectiveListSection(
                     closedObjectiveCount = closedObjectiveCount,
                     closedActionCount = closedActionCount,
                     onShowClosedChange = { showClosed = it },
+                    sortOrder = sortOrder,
+                    onSortOrderChange = { sortOrderName = it.name },
                 )
             }
             if (isFiltering) {
@@ -165,6 +178,8 @@ internal fun ObjectiveListSection(
                         onAddSubtask = { task -> onAddSubtask(objective, task) },
                         onEditTask = onEditTask,
                         onEditObjective = { onEditObjective(objective) },
+                        hasReusableTasks = reusableTasks.isNotEmpty(),
+                        onOpenReusableTasks = { onOpenReusableTasks(objective) },
                         showClosed = showClosed,
                     )
                 }
@@ -184,6 +199,8 @@ private fun ObjectiveFilters(
     closedObjectiveCount: Int,
     closedActionCount: Int,
     onShowClosedChange: (Boolean) -> Unit,
+    sortOrder: ObjectiveSortOrder,
+    onSortOrderChange: (ObjectiveSortOrder) -> Unit,
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -199,6 +216,27 @@ private fun ObjectiveFilters(
                 placeholder = { Text("Type an objective name") },
                 singleLine = true,
             )
+            Spacer(Modifier.height(12.dp))
+            Text(
+                "Sort objectives",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(6.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                ObjectiveSortOrder.entries.forEach { order ->
+                    FilterChip(
+                        selected = sortOrder == order,
+                        onClick = { onSortOrderChange(order) },
+                        label = { Text(order.label) },
+                    )
+                }
+            }
             Spacer(Modifier.height(12.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),

@@ -4,7 +4,12 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.todotimer.data.Objective
+import com.example.todotimer.data.ReusableTask
+import com.example.todotimer.data.Routine
+import com.example.todotimer.data.RoutineFrequency
+import com.example.todotimer.data.RoutineProgress
 import com.example.todotimer.data.TaskItem
+import com.example.todotimer.data.TimeEntry
 import com.example.todotimer.di.AppGraph
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -13,6 +18,10 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = AppGraph.repository(application)
     val objectives: StateFlow<List<Objective>> = repository.objectives
     val tasks: StateFlow<List<TaskItem>> = repository.tasks
+    val timeEntries: StateFlow<List<TimeEntry>> = repository.timeEntries
+    val reusableTasks: StateFlow<List<ReusableTask>> = repository.reusableTasks
+    val routines: StateFlow<List<Routine>> = repository.routines
+    val routineProgress: StateFlow<RoutineProgress?> = repository.routineProgress
 
     fun saveTask(
         id: Long?,
@@ -47,6 +56,38 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
 
     fun deleteObjective(objective: Objective) {
         viewModelScope.launch { repository.deleteObjective(objective.id) }
+    }
+
+    fun saveReusableTask(item: TaskItem) {
+        viewModelScope.launch { repository.saveReusableTask(item.id) }
+    }
+
+    fun useReusableTask(reusableTask: ReusableTask, objective: Objective) {
+        viewModelScope.launch { repository.useReusableTask(reusableTask.id, objective.id) }
+    }
+
+    fun deleteReusableTask(reusableTask: ReusableTask) {
+        viewModelScope.launch { repository.deleteReusableTask(reusableTask.id) }
+    }
+
+    fun saveRoutine(
+        id: Long?,
+        name: String,
+        frequency: RoutineFrequency,
+        nextRunAt: Long,
+        taskIds: List<Long>,
+    ) {
+        viewModelScope.launch {
+            repository.saveRoutine(id, name, frequency, nextRunAt, taskIds)
+        }
+    }
+
+    fun setRoutineEnabled(routine: Routine, enabled: Boolean) {
+        viewModelScope.launch { repository.setRoutineEnabled(routine.id, enabled) }
+    }
+
+    fun startRoutine(progress: RoutineProgress) {
+        viewModelScope.launch { repository.startRoutine(progress.runId) }
     }
 
     fun refresh() {
