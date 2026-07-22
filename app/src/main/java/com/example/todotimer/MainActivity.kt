@@ -61,6 +61,7 @@ class MainActivity : ComponentActivity() {
     companion object {
         const val ACTION_QUICK_ADD_TASK = "com.example.todotimer.action.QUICK_ADD_TASK"
         const val ACTION_OPEN_ONGOING = "com.example.todotimer.action.OPEN_ONGOING"
+        const val ACTION_OPEN_ROUTINES = "com.example.todotimer.action.OPEN_ROUTINES"
     }
 }
 
@@ -76,6 +77,8 @@ private fun TodoApp(
     val tasks by viewModel.tasks.collectAsStateWithLifecycle()
     val timeEntries by viewModel.timeEntries.collectAsStateWithLifecycle()
     val reusableTasks by viewModel.reusableTasks.collectAsStateWithLifecycle()
+    val routines by viewModel.routines.collectAsStateWithLifecycle()
+    val routineProgress by viewModel.routineProgress.collectAsStateWithLifecycle()
     var notificationAllowed by remember { mutableStateOf(context.hasNotificationPermission()) }
     var exactAlarmAllowed by remember {
         mutableStateOf(ReminderScheduler(context).hasExactAlarmAccess())
@@ -125,6 +128,8 @@ private fun TodoApp(
         tasks = tasks,
         timeEntries = timeEntries,
         reusableTasks = reusableTasks,
+        routines = routines,
+        routineProgress = routineProgress,
         launchAction = launchAction,
         onLaunchActionConsumed = onLaunchActionConsumed,
         notificationAllowed = notificationAllowed,
@@ -157,11 +162,16 @@ private fun TodoApp(
         onSaveReusableTask = viewModel::saveReusableTask,
         onUseReusableTask = viewModel::useReusableTask,
         onDeleteReusableTask = viewModel::deleteReusableTask,
+        onSaveRoutine = viewModel::saveRoutine,
+        onSetRoutineEnabled = viewModel::setRoutineEnabled,
+        onStartRoutine = viewModel::startRoutine,
         onDownloadAnalytics = { range ->
             pendingAnalyticsCsv.value = AnalyticsCsv.build(
                 objectives = objectives,
                 tasks = tasks,
                 timeEntries = timeEntries,
+                routines = routines,
+                routineProgress = routineProgress,
                 range = range,
                 nowMillis = System.currentTimeMillis(),
             )

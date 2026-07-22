@@ -13,13 +13,16 @@ A local-first Android productivity app organized as Objective → Task → Subta
 - Review total, objective-wise, and action-wise time for today, this week, this month, or a custom date range.
 - Download the selected date range as an Excel-friendly CSV file.
 - Save a task and its subtasks as a reusable template, then add a fresh copy to any objective.
+- Create daily, weekly, or monthly routines from existing tasks and choose their exact order.
+- Reopen routine tasks automatically at the scheduled time and start the first task from its notification.
+- Advance a routine from the persistent notification with Mark done and Start tracking actions.
 - Divide each objective into tasks and each task into optional subtasks.
 - Track objective progress from completed tasks.
 - Create, edit, complete, reopen, and delete tasks/subtasks.
 - Add or clear a date-and-time reminder for every task or subtask.
 - Receive reminder notifications, including after the phone restarts.
 - Start and stop a persistent timer on each task or subtask.
-- Keep the active timer visible in an ongoing notification with a Stop working action.
+- Keep the active timer visible in an ongoing notification with Stop working and Mark done actions.
 - Add home-screen widgets for pending tasks and quick task creation.
 - See live elapsed time and cumulative tracked time.
 - See subtask completion progress on each parent task.
@@ -36,12 +39,14 @@ A local-first Android productivity app organized as Objective → Task → Subta
 - Each task and subtask is treated as an action in analytics. Timer sessions are retained so date-range totals include only overlapping work.
 - Existing cumulative time is preserved during migration and backfilled as historical session data using the action's last known update.
 - Reusable templates copy task/subtask titles only; reminders, completion state, and logged time start fresh.
+- Routine schedules reuse existing tasks instead of creating duplicates. Each occurrence reopens the selected tasks and follows the saved order.
+- Timer sessions started through a routine retain routine attribution; Analytics separates routine work from objective work without double counting.
 - CSV downloads use Android's document picker and do not require storage permission.
 - Only one timer can run at once. Starting another timer first saves and stops the active one.
 - Completing a task completes its subtasks and stops all related timers.
 - Reopening a parent task does not automatically reopen its completed subtasks.
 - On Android 12+, the app asks for precise-alarm access. Without it, Android may delay a reminder.
-- On Android 13+, notification permission must be allowed for reminders and the running-timer notification to appear.
+- On Android 13+, notification permission must be allowed for reminders, routine alerts, and running-timer notifications to appear.
 
 ## Run in Android Studio
 
@@ -84,4 +89,4 @@ Because versions through 1.2 used a transient key that is no longer available, v
 
 ## Verification
 
-Pure unit tests cover cumulative time calculation, date-range overlap, objective sorting, reusable templates, CSV output, clock rollback safety, and duration formatting. For reminder QA, test once with precise alarms allowed and once denied to verify the fallback banner and behavior.
+Pure unit tests cover cumulative time calculation, date-range overlap, routine recurrence and ordering, objective sorting, reusable templates, CSV output, clock rollback safety, and duration formatting. For reminder and routine QA, test once with precise alarms allowed and once denied to verify the fallback banner and behavior.

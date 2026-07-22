@@ -11,6 +11,7 @@ data class TaskItem(
     val completedAt: Long?,
     val trackedMillis: Long,
     val timerStartedAt: Long?,
+    val timerRoutineRunId: Long? = null,
     val updatedAt: Long = createdAt,
 ) {
     val isSubtask: Boolean get() = parentTaskId != null

@@ -16,9 +16,14 @@ class ReminderRescheduleReceiver : BroadcastReceiver() {
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             try {
                 val scheduler = ReminderScheduler(context)
+                val routineScheduler = RoutineScheduler(context)
                 AppGraph.database(context)
                     .getUpcomingReminders(System.currentTimeMillis())
                     .forEach(scheduler::schedule)
+                AppGraph.database(context)
+                    .getRoutines()
+                    .filter { it.isEnabled }
+                    .forEach(routineScheduler::schedule)
                 AppGraph.repository(context).refresh()
             } finally {
                 pendingResult.finish()

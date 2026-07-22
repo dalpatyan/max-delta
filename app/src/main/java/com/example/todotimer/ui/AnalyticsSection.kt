@@ -37,6 +37,8 @@ import com.example.todotimer.data.AnalyticsRange
 import com.example.todotimer.data.AnalyticsRanges
 import com.example.todotimer.data.AnalyticsTime
 import com.example.todotimer.data.Objective
+import com.example.todotimer.data.Routine
+import com.example.todotimer.data.RoutineProgress
 import com.example.todotimer.data.TaskItem
 import com.example.todotimer.data.TimeEntry
 import com.example.todotimer.util.TimeTracking
@@ -52,8 +54,14 @@ private enum class AnalyticsPreset(val label: String) {
     CUSTOM("Custom"),
 }
 
-private data class ActionTime(val task: TaskItem, val millis: Long)
+private data class ActionTime(
+    val task: TaskItem,
+    val millis: Long,
+    val objectiveMillis: Long,
+    val routineMillis: Long,
+)
 private data class ObjectiveTime(val objective: Objective, val millis: Long)
+private data class RoutineTime(val routine: Routine, val millis: Long)
 
 @Composable
 internal fun AnalyticsSection(
@@ -61,6 +69,8 @@ internal fun AnalyticsSection(
     objectives: List<Objective>,
     tasks: List<TaskItem>,
     timeEntries: List<TimeEntry>,
+    routines: List<Routine>,
+    routineProgress: RoutineProgress?,
     nowMillis: Long,
     onDownloadCsv: (AnalyticsRange) -> Unit,
 ) {
@@ -84,19 +94,40 @@ internal fun AnalyticsSection(
     val objectivesById = remember(objectives) { objectives.associateBy { it.id } }
     val actionTimes = remember(tasks, timeEntries, range, nowMillis) {
         tasks.map { task ->
+            val runningMillis = AnalyticsTime.runningMillis(task, range, nowMillis)
+            val objectiveMillis = AnalyticsTime.closedObjectiveMillis(task.id, timeEntries, range) +
+                if (task.timerRoutineRunId == null) runningMillis else 0L
+            val routineMillis = AnalyticsTime.closedRoutineMillis(task.id, timeEntries, range) +
+                if (task.timerRoutineRunId != null) runningMillis else 0L
             ActionTime(
                 task = task,
-                millis = AnalyticsTime.loggedMillis(task, timeEntries, range, nowMillis),
+                millis = objectiveMillis + routineMillis,
+                objectiveMillis = objectiveMillis,
+                routineMillis = routineMillis,
             )
         }.sortedByDescending { it.millis }
     }
     val loggedActions = actionTimes.filter { it.millis > 0L }
     val totalMillis = actionTimes.sumOf { it.millis }
+    val routineMillis = actionTimes.sumOf { it.routineMillis }
+    val objectiveMillis = actionTimes.sumOf { it.objectiveMillis }
     val objectiveTimes = objectives.map { objective ->
         ObjectiveTime(
             objective = objective,
-            millis = actionTimes.filter { it.task.objectiveId == objective.id }.sumOf { it.millis },
+            millis = actionTimes.filter { it.task.objectiveId == objective.id }
+                .sumOf { it.objectiveMillis },
         )
+    }.filter { it.millis > 0L }.sortedByDescending { it.millis }
+    val routineTimes = routines.map { routine ->
+        var millis = timeEntries.asSequence()
+            .filter { it.routineId == routine.id }
+            .sumOf { AnalyticsTime.overlapMillis(it.startedAt, it.endedAt, range) }
+        if (routineProgress?.routineId == routine.id) {
+            millis += tasks.asSequence()
+                .filter { it.timerRoutineRunId == routineProgress.runId }
+                .sumOf { AnalyticsTime.runningMillis(it, range, nowMillis) }
+        }
+        RoutineTime(routine, millis)
     }.filter { it.millis > 0L }.sortedByDescending { it.millis }
 
     LazyColumn(
@@ -134,16 +165,50 @@ internal fun AnalyticsSection(
                 onDownloadCsv = { onDownloadCsv(range) },
             )
         }
+        item(key = "work_type_heading") {
+            Text(
+                "Routine vs objective",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(top = 8.dp),
+            )
+        }
+        item(key = "work_type_breakdown") {
+            WorkTypeBreakdown(
+                routineMillis = routineMillis,
+                objectiveMillis = objectiveMillis,
+            )
+        }
+        item(key = "routine_time_heading") {
+            Text(
+                "Time by routine",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(top = 8.dp),
+            )
+        }
+        if (routineTimes.isEmpty()) {
+            item(key = "no_routine_time") { NoTimeLogged(range.label, "routine") }
+        } else {
+            items(routineTimes, key = { "routine_time_${it.routine.id}" }) { record ->
+                TimeBreakdownRow(
+                    title = record.routine.name,
+                    subtitle = record.routine.frequency.label,
+                    millis = record.millis,
+                    usePrimaryColor = true,
+                )
+            }
+        }
         item(key = "objective_time_heading") {
             Text(
-                "Time by objective",
+                "Objective work outside routines",
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.padding(top = 8.dp),
             )
         }
         if (objectiveTimes.isEmpty()) {
-            item(key = "no_objective_time") { NoTimeLogged(range.label) }
+            item(key = "no_objective_time") { NoTimeLogged(range.label, "objective") }
         } else {
             items(objectiveTimes, key = { "objective_time_${it.objective.id}" }) { record ->
                 Surface(
@@ -190,7 +255,7 @@ internal fun AnalyticsSection(
             }
         }
         if (loggedActions.isEmpty()) {
-            item(key = "no_action_time") { NoTimeLogged(range.label) }
+            item(key = "no_action_time") { NoTimeLogged(range.label, "action") }
         } else {
             items(loggedActions, key = { "action_time_${it.task.id}" }) { record ->
                 AnalyticsActionRow(
@@ -300,6 +365,73 @@ private fun AnalyticsSummary(
 }
 
 @Composable
+private fun WorkTypeBreakdown(routineMillis: Long, objectiveMillis: Long) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text("Routine work", fontWeight = FontWeight.SemiBold)
+                Text(TimeTracking.format(routineMillis), fontWeight = FontWeight.Bold)
+            }
+            Spacer(Modifier.height(10.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text("Objective work", fontWeight = FontWeight.SemiBold)
+                Text(TimeTracking.format(objectiveMillis), fontWeight = FontWeight.Bold)
+            }
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Routine sessions are separated from work started outside a routine, so totals do not overlap.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun TimeBreakdownRow(
+    title: String,
+    subtitle: String,
+    millis: Long,
+    usePrimaryColor: Boolean,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = if (usePrimaryColor) MaterialTheme.colorScheme.primaryContainer
+        else MaterialTheme.colorScheme.secondaryContainer,
+        shape = MaterialTheme.shapes.large,
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(title, fontWeight = FontWeight.SemiBold)
+                Text(
+                    subtitle,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Text(
+                TimeTracking.format(millis),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+    }
+}
+
+@Composable
 private fun AnalyticsActionRow(record: ActionTime, objective: Objective?) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -318,6 +450,12 @@ private fun AnalyticsActionRow(record: ActionTime, objective: Objective?) {
                         append(if (record.task.isSubtask) "Subtask" else "Task")
                         objective?.let { append(" • ${it.title}") }
                         append(if (record.task.isDone) " • Done" else " • Open")
+                        when {
+                            record.objectiveMillis > 0L && record.routineMillis > 0L ->
+                                append(" • Objective + routine")
+                            record.routineMillis > 0L -> append(" • Routine")
+                            else -> append(" • Objective")
+                        }
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -333,14 +471,14 @@ private fun AnalyticsActionRow(record: ActionTime, objective: Objective?) {
 }
 
 @Composable
-private fun NoTimeLogged(rangeLabel: String) {
+private fun NoTimeLogged(rangeLabel: String, category: String) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.surfaceContainer,
         shape = MaterialTheme.shapes.large,
     ) {
         Text(
-            "No time was logged for $rangeLabel. Choose another range or start working on an action.",
+            "No $category time was logged for $rangeLabel.",
             modifier = Modifier.padding(16.dp),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,

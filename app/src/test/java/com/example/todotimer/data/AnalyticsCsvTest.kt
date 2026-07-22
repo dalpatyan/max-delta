@@ -31,6 +31,8 @@ class AnalyticsCsvTest {
             objectives = listOf(objective),
             tasks = listOf(task),
             timeEntries = entries,
+            routines = emptyList(),
+            routineProgress = null,
             range = range,
             nowMillis = 7_000L,
         )
@@ -40,6 +42,6 @@ class AnalyticsCsvTest {
         assertTrue(csv.contains("\"Launch, pilot\""))
         assertTrue(csv.contains("\"Professional | Q3\""))
         assertTrue(csv.contains("\"Review \"\"results\"\"\""))
-        assertTrue(csv.contains("\"Running\",5,\"00:00:05\""))
+        assertTrue(csv.contains("\"Running\",\"Objective\",\"\",5,0,5,\"00:00:05\""))
     }
 }

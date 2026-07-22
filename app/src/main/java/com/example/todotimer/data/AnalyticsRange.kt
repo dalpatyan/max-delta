@@ -61,14 +61,28 @@ object AnalyticsTime {
         range: AnalyticsRange,
         nowMillis: Long,
     ): Long {
-        val closedSessions = entries.asSequence()
-            .filter { it.taskId == task.id }
+        return closedMillis(task.id, entries, range) + runningMillis(task, range, nowMillis)
+    }
+
+    fun closedMillis(taskId: Long, entries: List<TimeEntry>, range: AnalyticsRange): Long =
+        entries.asSequence()
+            .filter { it.taskId == taskId }
             .sumOf { overlapMillis(it.startedAt, it.endedAt, range) }
-        val runningSession = task.timerStartedAt?.let { startedAt ->
+
+    fun closedRoutineMillis(taskId: Long, entries: List<TimeEntry>, range: AnalyticsRange): Long =
+        entries.asSequence()
+            .filter { it.taskId == taskId && it.routineId != null }
+            .sumOf { overlapMillis(it.startedAt, it.endedAt, range) }
+
+    fun closedObjectiveMillis(taskId: Long, entries: List<TimeEntry>, range: AnalyticsRange): Long =
+        entries.asSequence()
+            .filter { it.taskId == taskId && it.routineId == null }
+            .sumOf { overlapMillis(it.startedAt, it.endedAt, range) }
+
+    fun runningMillis(task: TaskItem, range: AnalyticsRange, nowMillis: Long): Long =
+        task.timerStartedAt?.let { startedAt ->
             overlapMillis(startedAt, nowMillis.coerceAtLeast(startedAt), range)
         } ?: 0L
-        return closedSessions + runningSession
-    }
 
     internal fun overlapMillis(
         startedAt: Long,

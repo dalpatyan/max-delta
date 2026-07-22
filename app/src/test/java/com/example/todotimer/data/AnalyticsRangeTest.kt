@@ -49,4 +49,17 @@ class AnalyticsRangeTest {
             range.endExclusiveMillis,
         )
     }
+
+    @Test
+    fun `routine and objective sessions are attributed without overlap`() {
+        val range = AnalyticsRange(0L, 10_000L, "Custom")
+        val entries = listOf(
+            TimeEntry(1L, task.id, 1_000L, 4_000L),
+            TimeEntry(2L, task.id, 4_000L, 9_000L, routineId = 3L, routineRunId = 30L),
+        )
+
+        assertEquals(3_000L, AnalyticsTime.closedObjectiveMillis(task.id, entries, range))
+        assertEquals(5_000L, AnalyticsTime.closedRoutineMillis(task.id, entries, range))
+        assertEquals(8_000L, AnalyticsTime.closedMillis(task.id, entries, range))
+    }
 }

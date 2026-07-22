@@ -34,13 +34,15 @@ class TaskDatabase(context: Context) : SQLiteOpenHelper(
                 $COL_COMPLETED_AT INTEGER,
                 $COL_TRACKED_MILLIS INTEGER NOT NULL DEFAULT 0,
                 $COL_TIMER_STARTED_AT INTEGER,
+                $COL_TIMER_ROUTINE_RUN_ID INTEGER,
                 $COL_UPDATED_AT INTEGER NOT NULL
             )
             """.trimIndent(),
         )
         createTaskIndexes(db)
-        createTimeEntriesTable(db)
         createReusableTasksTable(db)
+        createRoutineTables(db)
+        createTimeEntriesTable(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -48,6 +50,7 @@ class TaskDatabase(context: Context) : SQLiteOpenHelper(
         if (oldVersion < 3) addObjectiveTagsColumnIfMissing(db)
         if (oldVersion < 4) addUpdateTrackingAndTimeEntries(db)
         if (oldVersion < 5) createReusableTasksTable(db)
+        if (oldVersion < 6) addRoutinesAndAttribution(db)
     }
 
     fun getObjectives(): List<Objective> = readableDatabase.query(
@@ -136,6 +139,8 @@ class TaskDatabase(context: Context) : SQLiteOpenHelper(
                         taskId = cursor.getLong(cursor.getColumnIndexOrThrow(COL_ENTRY_TASK_ID)),
                         startedAt = cursor.getLong(cursor.getColumnIndexOrThrow(COL_ENTRY_STARTED_AT)),
                         endedAt = cursor.getLong(cursor.getColumnIndexOrThrow(COL_ENTRY_ENDED_AT)),
+                        routineId = cursor.getNullableLong(COL_ENTRY_ROUTINE_ID),
+                        routineRunId = cursor.getNullableLong(COL_ENTRY_ROUTINE_RUN_ID),
                     ),
                 )
             }
@@ -237,6 +242,236 @@ class TaskDatabase(context: Context) : SQLiteOpenHelper(
 
     fun deleteReusableTask(id: Long) {
         writableDatabase.delete(TABLE_REUSABLE_TASKS, "$COL_ID = ?", arrayOf(id.toString()))
+    }
+
+    fun getRoutines(): List<Routine> = readableDatabase.query(
+        TABLE_ROUTINES,
+        ROUTINE_COLUMNS,
+        null,
+        null,
+        null,
+        null,
+        "$COL_ROUTINE_ENABLED DESC, $COL_ROUTINE_NEXT_RUN_AT ASC",
+    ).use { cursor ->
+        buildList {
+            while (cursor.moveToNext()) {
+                add(cursor.readRoutine(readableDatabase))
+            }
+        }
+    }
+
+    fun saveRoutine(
+        id: Long?,
+        name: String,
+        frequency: RoutineFrequency,
+        nextRunAt: Long,
+        taskIds: List<Long>,
+        nowMillis: Long,
+    ): Long {
+        require(taskIds.isNotEmpty()) { "A routine needs at least one task" }
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            val values = ContentValues().apply {
+                put(COL_ROUTINE_NAME, name)
+                put(COL_ROUTINE_FREQUENCY, frequency.name)
+                put(COL_ROUTINE_NEXT_RUN_AT, nextRunAt)
+                put(COL_ROUTINE_ENABLED, 1)
+                put(COL_UPDATED_AT, nowMillis)
+                if (id == null) put(COL_CREATED_AT, nowMillis)
+            }
+            val routineId = if (id == null) {
+                db.insertOrThrow(TABLE_ROUTINES, null, values)
+            } else {
+                db.update(TABLE_ROUTINES, values, "$COL_ID = ?", arrayOf(id.toString()))
+                id
+            }
+            db.delete(TABLE_ROUTINE_STEPS, "$COL_STEP_ROUTINE_ID = ?", arrayOf(routineId.toString()))
+            taskIds.distinct().forEachIndexed { position, taskId ->
+                db.insertOrThrow(
+                    TABLE_ROUTINE_STEPS,
+                    null,
+                    ContentValues().apply {
+                        put(COL_STEP_ROUTINE_ID, routineId)
+                        put(COL_STEP_TASK_ID, taskId)
+                        put(COL_STEP_POSITION, position)
+                    },
+                )
+            }
+            db.setTransactionSuccessful()
+            return routineId
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    fun setRoutineEnabled(id: Long, enabled: Boolean, nowMillis: Long) {
+        writableDatabase.update(
+            TABLE_ROUTINES,
+            ContentValues().apply {
+                put(COL_ROUTINE_ENABLED, if (enabled) 1 else 0)
+                put(COL_UPDATED_AT, nowMillis)
+            },
+            "$COL_ID = ?",
+            arrayOf(id.toString()),
+        )
+    }
+
+    fun activateRoutine(
+        routineId: Long,
+        scheduledAt: Long,
+        nowMillis: Long,
+    ): RoutineProgress? {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            val routine = findRoutineById(db, routineId) ?: return null
+            if (!routine.isEnabled || routine.taskIds.isEmpty()) return null
+
+            val runValues = ContentValues().apply {
+                put(COL_RUN_ROUTINE_ID, routineId)
+                put(COL_RUN_SCHEDULED_AT, scheduledAt)
+                put(COL_RUN_CURRENT_POSITION, 0)
+            }
+            val insertedRunId = db.insertWithOnConflict(
+                TABLE_ROUTINE_RUNS,
+                null,
+                runValues,
+                SQLiteDatabase.CONFLICT_IGNORE,
+            )
+            val runId = if (insertedRunId >= 0L) insertedRunId else {
+                DatabaseUtils.longForQuery(
+                    db,
+                    "SELECT $COL_ID FROM $TABLE_ROUTINE_RUNS " +
+                        "WHERE $COL_RUN_ROUTINE_ID = ? AND $COL_RUN_SCHEDULED_AT = ?",
+                    arrayOf(routineId.toString(), scheduledAt.toString()),
+                )
+            }
+            if (insertedRunId >= 0L) {
+                routine.taskIds.forEach { taskId ->
+                    val task = findById(db, taskId) ?: return@forEach
+                    recordRunningSession(db, task, nowMillis)
+                    db.update(
+                        TABLE_TASKS,
+                        ContentValues().apply {
+                            put(COL_IS_DONE, 0)
+                            putNull(COL_COMPLETED_AT)
+                            putNull(COL_TIMER_STARTED_AT)
+                            putNull(COL_TIMER_ROUTINE_RUN_ID)
+                            put(COL_UPDATED_AT, nowMillis)
+                        },
+                        "$COL_ID = ?",
+                        arrayOf(taskId.toString()),
+                    )
+                }
+                var nextRunAt = routine.frequency.nextOccurrence(scheduledAt)
+                while (nextRunAt <= nowMillis) {
+                    nextRunAt = routine.frequency.nextOccurrence(nextRunAt)
+                }
+                db.update(
+                    TABLE_ROUTINES,
+                    ContentValues().apply {
+                        put(COL_ROUTINE_NEXT_RUN_AT, nextRunAt)
+                        put(COL_UPDATED_AT, nowMillis)
+                    },
+                    "$COL_ID = ?",
+                    arrayOf(routineId.toString()),
+                )
+            }
+            db.setTransactionSuccessful()
+            return routineProgress(db, runId)
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    fun getActiveRoutineProgress(): RoutineProgress? = readableDatabase.rawQuery(
+        """
+        SELECT rr.$COL_ID
+        FROM $TABLE_ROUTINE_RUNS rr
+        WHERE rr.$COL_RUN_COMPLETED_AT IS NULL
+        ORDER BY CASE WHEN rr.$COL_RUN_STARTED_AT IS NOT NULL THEN 0 ELSE 1 END,
+                 rr.$COL_RUN_SCHEDULED_AT DESC
+        LIMIT 1
+        """.trimIndent(),
+        null,
+    ).use { cursor ->
+        if (cursor.moveToFirst()) routineProgress(readableDatabase, cursor.getLong(0)) else null
+    }
+
+    fun getReadyRoutineProgress(): RoutineProgress? = readableDatabase.query(
+        TABLE_ROUTINE_RUNS,
+        arrayOf(COL_ID),
+        "$COL_RUN_COMPLETED_AT IS NULL AND $COL_RUN_STARTED_AT IS NULL",
+        null,
+        null,
+        null,
+        "$COL_RUN_SCHEDULED_AT DESC",
+        "1",
+    ).use { cursor ->
+        if (cursor.moveToFirst()) routineProgress(readableDatabase, cursor.getLong(0)) else null
+    }
+
+    fun startRoutineRun(runId: Long, nowMillis: Long) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            val progress = routineProgress(db, runId) ?: return
+            val taskId = progress.currentTaskId ?: return
+            db.execSQL(
+                "UPDATE $TABLE_ROUTINE_RUNS SET $COL_RUN_STARTED_AT = " +
+                    "COALESCE($COL_RUN_STARTED_AT, ?) WHERE $COL_ID = ?",
+                arrayOf(nowMillis, runId),
+            )
+            startTimer(db, taskId, nowMillis, runId)
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    fun advanceActiveRoutinesForTasks(taskIds: Collection<Long>, nowMillis: Long) {
+        if (taskIds.isEmpty()) return
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            val runIds = db.query(
+                TABLE_ROUTINE_RUNS,
+                arrayOf(COL_ID),
+                "$COL_RUN_COMPLETED_AT IS NULL",
+                null,
+                null,
+                null,
+                null,
+            ).use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.getLong(0)) } }
+            runIds.forEach { runId ->
+                val progress = routineProgress(db, runId) ?: return@forEach
+                val currentTaskId = progress.currentTaskId ?: return@forEach
+                if (currentTaskId !in taskIds) return@forEach
+                val nextPosition = progress.taskIds.indices.firstOrNull { position ->
+                    position > progress.currentPosition &&
+                        findById(db, progress.taskIds[position])?.isDone == false
+                }
+                if (nextPosition == null) {
+                    db.update(
+                        TABLE_ROUTINE_RUNS,
+                        ContentValues().apply { put(COL_RUN_COMPLETED_AT, nowMillis) },
+                        "$COL_ID = ?",
+                        arrayOf(runId.toString()),
+                    )
+                } else {
+                    db.update(
+                        TABLE_ROUTINE_RUNS,
+                        ContentValues().apply { put(COL_RUN_CURRENT_POSITION, nextPosition) },
+                        "$COL_ID = ?",
+                        arrayOf(runId.toString()),
+                    )
+                }
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
     }
 
     fun getPendingTaskCount(): Int = DatabaseUtils.longForQuery(
@@ -369,6 +604,7 @@ class TaskDatabase(context: Context) : SQLiteOpenHelper(
                             ),
                         )
                         putNull(COL_TIMER_STARTED_AT)
+                        putNull(COL_TIMER_ROUTINE_RUN_ID)
                         put(COL_COMPLETED_AT, nowMillis)
                     } else {
                         putNull(COL_COMPLETED_AT)
@@ -388,44 +624,56 @@ class TaskDatabase(context: Context) : SQLiteOpenHelper(
         val db = writableDatabase
         db.beginTransaction()
         try {
-            db.query(
-                TABLE_TASKS,
-                TASK_COLUMNS,
-                "$COL_TIMER_STARTED_AT IS NOT NULL",
-                null,
-                null,
-                null,
-                null,
-            ).use { cursor ->
-                cursor.readTasks().forEach { runningTask ->
-                    recordRunningSession(db, runningTask, nowMillis)
-                    val values = ContentValues().apply {
-                        put(
-                            COL_TRACKED_MILLIS,
-                            TimeTracking.totalAt(
-                                runningTask.trackedMillis,
-                                runningTask.timerStartedAt,
-                                nowMillis,
-                            ),
-                        )
-                        putNull(COL_TIMER_STARTED_AT)
-                        put(COL_UPDATED_AT, nowMillis)
-                    }
-                    db.update(TABLE_TASKS, values, "$COL_ID = ?", arrayOf(runningTask.id.toString()))
-                }
-            }
-
-            val target = findById(db, id)
-            if (target != null && !target.isDone) {
-                val values = ContentValues().apply {
-                    put(COL_TIMER_STARTED_AT, nowMillis)
-                    put(COL_UPDATED_AT, nowMillis)
-                }
-                db.update(TABLE_TASKS, values, "$COL_ID = ?", arrayOf(id.toString()))
-            }
+            val routineRunId = resolveRoutineRunForTask(db, id, nowMillis)
+            startTimer(db, id, nowMillis, routineRunId)
             db.setTransactionSuccessful()
         } finally {
             db.endTransaction()
+        }
+    }
+
+    private fun startTimer(
+        db: SQLiteDatabase,
+        id: Long,
+        nowMillis: Long,
+        routineRunId: Long?,
+    ) {
+        db.query(
+            TABLE_TASKS,
+            TASK_COLUMNS,
+            "$COL_TIMER_STARTED_AT IS NOT NULL",
+            null,
+            null,
+            null,
+            null,
+        ).use { cursor ->
+            cursor.readTasks().forEach { runningTask ->
+                recordRunningSession(db, runningTask, nowMillis)
+                val values = ContentValues().apply {
+                    put(
+                        COL_TRACKED_MILLIS,
+                        TimeTracking.totalAt(
+                            runningTask.trackedMillis,
+                            runningTask.timerStartedAt,
+                            nowMillis,
+                        ),
+                    )
+                    putNull(COL_TIMER_STARTED_AT)
+                    putNull(COL_TIMER_ROUTINE_RUN_ID)
+                    put(COL_UPDATED_AT, nowMillis)
+                }
+                db.update(TABLE_TASKS, values, "$COL_ID = ?", arrayOf(runningTask.id.toString()))
+            }
+        }
+
+        val target = findById(db, id)
+        if (target != null && !target.isDone) {
+            val values = ContentValues().apply {
+                put(COL_TIMER_STARTED_AT, nowMillis)
+                putNullableLong(COL_TIMER_ROUTINE_RUN_ID, routineRunId)
+                put(COL_UPDATED_AT, nowMillis)
+            }
+            db.update(TABLE_TASKS, values, "$COL_ID = ?", arrayOf(id.toString()))
         }
     }
 
@@ -446,6 +694,7 @@ class TaskDatabase(context: Context) : SQLiteOpenHelper(
                     ),
                 )
                 putNull(COL_TIMER_STARTED_AT)
+                putNull(COL_TIMER_ROUTINE_RUN_ID)
                 put(COL_UPDATED_AT, nowMillis)
             }
             db.update(TABLE_TASKS, values, "$COL_ID = ?", arrayOf(id.toString()))
@@ -481,6 +730,10 @@ class TaskDatabase(context: Context) : SQLiteOpenHelper(
             put(COL_ENTRY_TASK_ID, task.id)
             put(COL_ENTRY_STARTED_AT, startedAt)
             put(COL_ENTRY_ENDED_AT, endedAt)
+            task.timerRoutineRunId?.let { runId ->
+                put(COL_ENTRY_ROUTINE_RUN_ID, runId)
+                routineIdForRun(db, runId)?.let { put(COL_ENTRY_ROUTINE_ID, it) }
+            }
         }
         db.insertOrThrow(TABLE_TIME_ENTRIES, null, values)
     }
@@ -495,6 +748,114 @@ class TaskDatabase(context: Context) : SQLiteOpenHelper(
         null,
         "1",
     ).use { cursor -> if (cursor.moveToFirst()) cursor.readTask() else null }
+
+    private fun findRoutineById(db: SQLiteDatabase, id: Long): Routine? = db.query(
+        TABLE_ROUTINES,
+        ROUTINE_COLUMNS,
+        "$COL_ID = ?",
+        arrayOf(id.toString()),
+        null,
+        null,
+        null,
+        "1",
+    ).use { cursor -> if (cursor.moveToFirst()) cursor.readRoutine(db) else null }
+
+    private fun Cursor.readRoutine(db: SQLiteDatabase): Routine {
+        val routineId = getLong(getColumnIndexOrThrow(COL_ID))
+        return Routine(
+            id = routineId,
+            name = getString(getColumnIndexOrThrow(COL_ROUTINE_NAME)),
+            frequency = RoutineFrequency.valueOf(
+                getString(getColumnIndexOrThrow(COL_ROUTINE_FREQUENCY)),
+            ),
+            nextRunAt = getLong(getColumnIndexOrThrow(COL_ROUTINE_NEXT_RUN_AT)),
+            isEnabled = getInt(getColumnIndexOrThrow(COL_ROUTINE_ENABLED)) == 1,
+            taskIds = routineTaskIds(db, routineId),
+            createdAt = getLong(getColumnIndexOrThrow(COL_CREATED_AT)),
+            updatedAt = getLong(getColumnIndexOrThrow(COL_UPDATED_AT)),
+        )
+    }
+
+    private fun routineTaskIds(db: SQLiteDatabase, routineId: Long): List<Long> = db.query(
+        TABLE_ROUTINE_STEPS,
+        arrayOf(COL_STEP_TASK_ID),
+        "$COL_STEP_ROUTINE_ID = ?",
+        arrayOf(routineId.toString()),
+        null,
+        null,
+        "$COL_STEP_POSITION ASC",
+    ).use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.getLong(0)) } }
+
+    private fun routineProgress(db: SQLiteDatabase, runId: Long): RoutineProgress? {
+        return db.rawQuery(
+            """
+            SELECT rr.$COL_RUN_ROUTINE_ID,
+                   r.$COL_ROUTINE_NAME,
+                   rr.$COL_RUN_SCHEDULED_AT,
+                   rr.$COL_RUN_STARTED_AT,
+                   rr.$COL_RUN_CURRENT_POSITION
+            FROM $TABLE_ROUTINE_RUNS rr
+            INNER JOIN $TABLE_ROUTINES r ON r.$COL_ID = rr.$COL_RUN_ROUTINE_ID
+            WHERE rr.$COL_ID = ? AND rr.$COL_RUN_COMPLETED_AT IS NULL
+            LIMIT 1
+            """.trimIndent(),
+            arrayOf(runId.toString()),
+        ).use { cursor ->
+            if (!cursor.moveToFirst()) return null
+            val routineId = cursor.getLong(0)
+            RoutineProgress(
+                runId = runId,
+                routineId = routineId,
+                routineName = cursor.getString(1),
+                scheduledAt = cursor.getLong(2),
+                startedAt = if (cursor.isNull(3)) null else cursor.getLong(3),
+                currentPosition = cursor.getInt(4),
+                taskIds = routineTaskIds(db, routineId),
+            )
+        }
+    }
+
+    private fun resolveRoutineRunForTask(
+        db: SQLiteDatabase,
+        taskId: Long,
+        nowMillis: Long,
+    ): Long? {
+        return db.rawQuery(
+            """
+            SELECT rr.$COL_ID
+            FROM $TABLE_ROUTINE_RUNS rr
+            INNER JOIN $TABLE_ROUTINE_STEPS rs
+                ON rs.$COL_STEP_ROUTINE_ID = rr.$COL_RUN_ROUTINE_ID
+               AND rs.$COL_STEP_POSITION = rr.$COL_RUN_CURRENT_POSITION
+            WHERE rr.$COL_RUN_COMPLETED_AT IS NULL
+              AND rs.$COL_STEP_TASK_ID = ?
+            ORDER BY CASE WHEN rr.$COL_RUN_STARTED_AT IS NOT NULL THEN 0 ELSE 1 END,
+                     rr.$COL_RUN_SCHEDULED_AT DESC
+            LIMIT 1
+            """.trimIndent(),
+            arrayOf(taskId.toString()),
+        ).use { cursor ->
+            if (!cursor.moveToFirst()) return null
+            cursor.getLong(0).also { runId ->
+                db.execSQL(
+                    "UPDATE $TABLE_ROUTINE_RUNS SET $COL_RUN_STARTED_AT = " +
+                        "COALESCE($COL_RUN_STARTED_AT, ?) WHERE $COL_ID = ?",
+                    arrayOf(nowMillis, runId),
+                )
+            }
+        }
+    }
+
+    private fun routineIdForRun(db: SQLiteDatabase, runId: Long): Long? = db.query(
+        TABLE_ROUTINE_RUNS,
+        arrayOf(COL_RUN_ROUTINE_ID),
+        "$COL_ID = ?",
+        arrayOf(runId.toString()),
+        null,
+        null,
+        null,
+        "1",
+    ).use { cursor -> if (cursor.moveToFirst()) cursor.getLong(0) else null }
 
     private fun Cursor.readTasks(): List<TaskItem> = buildList {
         while (moveToNext()) add(readTask())
@@ -511,6 +872,7 @@ class TaskDatabase(context: Context) : SQLiteOpenHelper(
         completedAt = getNullableLong(COL_COMPLETED_AT),
         trackedMillis = getLong(getColumnIndexOrThrow(COL_TRACKED_MILLIS)),
         timerStartedAt = getNullableLong(COL_TIMER_STARTED_AT),
+        timerRoutineRunId = getNullableLong(COL_TIMER_ROUTINE_RUN_ID),
         updatedAt = getLong(getColumnIndexOrThrow(COL_UPDATED_AT)),
     )
 
@@ -550,7 +912,9 @@ class TaskDatabase(context: Context) : SQLiteOpenHelper(
                 $COL_ID INTEGER PRIMARY KEY AUTOINCREMENT,
                 $COL_ENTRY_TASK_ID INTEGER NOT NULL REFERENCES $TABLE_TASKS($COL_ID) ON DELETE CASCADE,
                 $COL_ENTRY_STARTED_AT INTEGER NOT NULL,
-                $COL_ENTRY_ENDED_AT INTEGER NOT NULL
+                $COL_ENTRY_ENDED_AT INTEGER NOT NULL,
+                $COL_ENTRY_ROUTINE_ID INTEGER REFERENCES $TABLE_ROUTINES($COL_ID),
+                $COL_ENTRY_ROUTINE_RUN_ID INTEGER REFERENCES $TABLE_ROUTINE_RUNS($COL_ID)
             )
             """.trimIndent(),
         )
@@ -570,6 +934,57 @@ class TaskDatabase(context: Context) : SQLiteOpenHelper(
                 $COL_CREATED_AT INTEGER NOT NULL
             )
             """.trimIndent(),
+        )
+    }
+
+    private fun createRoutineTables(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS $TABLE_ROUTINES (
+                $COL_ID INTEGER PRIMARY KEY AUTOINCREMENT,
+                $COL_ROUTINE_NAME TEXT NOT NULL,
+                $COL_ROUTINE_FREQUENCY TEXT NOT NULL,
+                $COL_ROUTINE_NEXT_RUN_AT INTEGER NOT NULL,
+                $COL_ROUTINE_ENABLED INTEGER NOT NULL DEFAULT 1,
+                $COL_CREATED_AT INTEGER NOT NULL,
+                $COL_UPDATED_AT INTEGER NOT NULL
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS $TABLE_ROUTINE_STEPS (
+                $COL_ID INTEGER PRIMARY KEY AUTOINCREMENT,
+                $COL_STEP_ROUTINE_ID INTEGER NOT NULL
+                    REFERENCES $TABLE_ROUTINES($COL_ID) ON DELETE CASCADE,
+                $COL_STEP_TASK_ID INTEGER NOT NULL
+                    REFERENCES $TABLE_TASKS($COL_ID) ON DELETE CASCADE,
+                $COL_STEP_POSITION INTEGER NOT NULL,
+                UNIQUE($COL_STEP_ROUTINE_ID, $COL_STEP_TASK_ID)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS $TABLE_ROUTINE_RUNS (
+                $COL_ID INTEGER PRIMARY KEY AUTOINCREMENT,
+                $COL_RUN_ROUTINE_ID INTEGER NOT NULL
+                    REFERENCES $TABLE_ROUTINES($COL_ID) ON DELETE CASCADE,
+                $COL_RUN_SCHEDULED_AT INTEGER NOT NULL,
+                $COL_RUN_STARTED_AT INTEGER,
+                $COL_RUN_COMPLETED_AT INTEGER,
+                $COL_RUN_CURRENT_POSITION INTEGER NOT NULL DEFAULT 0,
+                UNIQUE($COL_RUN_ROUTINE_ID, $COL_RUN_SCHEDULED_AT)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS index_routine_steps_routine_id " +
+                "ON $TABLE_ROUTINE_STEPS($COL_STEP_ROUTINE_ID)",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS index_routine_runs_routine_id " +
+                "ON $TABLE_ROUTINE_RUNS($COL_RUN_ROUTINE_ID)",
         )
     }
 
@@ -639,6 +1054,19 @@ class TaskDatabase(context: Context) : SQLiteOpenHelper(
         )
     }
 
+    private fun addRoutinesAndAttribution(db: SQLiteDatabase) {
+        createRoutineTables(db)
+        if (!hasColumn(db, TABLE_TASKS, COL_TIMER_ROUTINE_RUN_ID)) {
+            db.execSQL("ALTER TABLE $TABLE_TASKS ADD COLUMN $COL_TIMER_ROUTINE_RUN_ID INTEGER")
+        }
+        if (!hasColumn(db, TABLE_TIME_ENTRIES, COL_ENTRY_ROUTINE_ID)) {
+            db.execSQL("ALTER TABLE $TABLE_TIME_ENTRIES ADD COLUMN $COL_ENTRY_ROUTINE_ID INTEGER")
+        }
+        if (!hasColumn(db, TABLE_TIME_ENTRIES, COL_ENTRY_ROUTINE_RUN_ID)) {
+            db.execSQL("ALTER TABLE $TABLE_TIME_ENTRIES ADD COLUMN $COL_ENTRY_ROUTINE_RUN_ID INTEGER")
+        }
+    }
+
     private fun hasColumn(db: SQLiteDatabase, table: String, column: String): Boolean =
         db.rawQuery("PRAGMA table_info($table)", null).use { cursor ->
             val nameIndex = cursor.getColumnIndexOrThrow("name")
@@ -654,11 +1082,14 @@ class TaskDatabase(context: Context) : SQLiteOpenHelper(
 
     private companion object {
         const val DATABASE_NAME = "todo_timer.db"
-        const val DATABASE_VERSION = 5
+        const val DATABASE_VERSION = 6
         const val TABLE_OBJECTIVES = "objectives"
         const val TABLE_TASKS = "tasks"
         const val TABLE_TIME_ENTRIES = "time_entries"
         const val TABLE_REUSABLE_TASKS = "reusable_tasks"
+        const val TABLE_ROUTINES = "routines"
+        const val TABLE_ROUTINE_STEPS = "routine_steps"
+        const val TABLE_ROUTINE_RUNS = "routine_runs"
         const val COL_ID = "id"
         const val COL_OBJECTIVE_ID = "objective_id"
         const val COL_PARENT_ID = "parent_id"
@@ -670,11 +1101,26 @@ class TaskDatabase(context: Context) : SQLiteOpenHelper(
         const val COL_COMPLETED_AT = "completed_at"
         const val COL_TRACKED_MILLIS = "tracked_millis"
         const val COL_TIMER_STARTED_AT = "timer_started_at"
+        const val COL_TIMER_ROUTINE_RUN_ID = "timer_routine_run_id"
         const val COL_UPDATED_AT = "updated_at"
         const val COL_ENTRY_TASK_ID = "task_id"
         const val COL_ENTRY_STARTED_AT = "started_at"
         const val COL_ENTRY_ENDED_AT = "ended_at"
+        const val COL_ENTRY_ROUTINE_ID = "routine_id"
+        const val COL_ENTRY_ROUTINE_RUN_ID = "routine_run_id"
         const val COL_TEMPLATE_SUBTASKS = "subtasks"
+        const val COL_ROUTINE_NAME = "name"
+        const val COL_ROUTINE_FREQUENCY = "frequency"
+        const val COL_ROUTINE_NEXT_RUN_AT = "next_run_at"
+        const val COL_ROUTINE_ENABLED = "is_enabled"
+        const val COL_STEP_ROUTINE_ID = "routine_id"
+        const val COL_STEP_TASK_ID = "task_id"
+        const val COL_STEP_POSITION = "position"
+        const val COL_RUN_ROUTINE_ID = "routine_id"
+        const val COL_RUN_SCHEDULED_AT = "scheduled_at"
+        const val COL_RUN_STARTED_AT = "started_at"
+        const val COL_RUN_COMPLETED_AT = "completed_at"
+        const val COL_RUN_CURRENT_POSITION = "current_position"
         val OBJECTIVE_COLUMNS = arrayOf(
             COL_ID,
             COL_TITLE,
@@ -693,6 +1139,7 @@ class TaskDatabase(context: Context) : SQLiteOpenHelper(
             COL_COMPLETED_AT,
             COL_TRACKED_MILLIS,
             COL_TIMER_STARTED_AT,
+            COL_TIMER_ROUTINE_RUN_ID,
             COL_UPDATED_AT,
         )
         val TIME_ENTRY_COLUMNS = arrayOf(
@@ -700,12 +1147,23 @@ class TaskDatabase(context: Context) : SQLiteOpenHelper(
             COL_ENTRY_TASK_ID,
             COL_ENTRY_STARTED_AT,
             COL_ENTRY_ENDED_AT,
+            COL_ENTRY_ROUTINE_ID,
+            COL_ENTRY_ROUTINE_RUN_ID,
         )
         val REUSABLE_TASK_COLUMNS = arrayOf(
             COL_ID,
             COL_TITLE,
             COL_TEMPLATE_SUBTASKS,
             COL_CREATED_AT,
+        )
+        val ROUTINE_COLUMNS = arrayOf(
+            COL_ID,
+            COL_ROUTINE_NAME,
+            COL_ROUTINE_FREQUENCY,
+            COL_ROUTINE_NEXT_RUN_AT,
+            COL_ROUTINE_ENABLED,
+            COL_CREATED_AT,
+            COL_UPDATED_AT,
         )
     }
 }

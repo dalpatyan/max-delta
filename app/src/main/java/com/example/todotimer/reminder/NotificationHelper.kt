@@ -28,6 +28,7 @@ object NotificationHelper {
         }
         context.getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         TimerNotificationManager.createChannel(context)
+        RoutineNotificationManager.createChannel(context)
     }
 
     fun showReminder(context: Context, item: TaskItem) {

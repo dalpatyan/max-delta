@@ -1,6 +1,7 @@
 package com.example.todotimer.data
 
 import com.example.todotimer.reminder.ReminderScheduler
+import com.example.todotimer.reminder.RoutineScheduler
 import com.example.todotimer.system.TaskStateNotifier
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -16,6 +17,7 @@ import kotlinx.coroutines.withContext
 class TaskRepository(
     private val database: TaskDatabase,
     private val reminderScheduler: ReminderScheduler,
+    private val routineScheduler: RoutineScheduler,
     private val taskStateNotifier: TaskStateNotifier,
 ) {
     private val repositoryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -28,6 +30,10 @@ class TaskRepository(
     val timeEntries: StateFlow<List<TimeEntry>> = _timeEntries.asStateFlow()
     private val _reusableTasks = MutableStateFlow<List<ReusableTask>>(emptyList())
     val reusableTasks: StateFlow<List<ReusableTask>> = _reusableTasks.asStateFlow()
+    private val _routines = MutableStateFlow<List<Routine>>(emptyList())
+    val routines: StateFlow<List<Routine>> = _routines.asStateFlow()
+    private val _routineProgress = MutableStateFlow<RoutineProgress?>(null)
+    val routineProgress: StateFlow<RoutineProgress?> = _routineProgress.asStateFlow()
 
     init {
         repositoryScope.launch { refresh() }
@@ -77,7 +83,11 @@ class TaskRepository(
 
     suspend fun setDone(id: Long, done: Boolean) = writeMutex.withLock {
         withContext(Dispatchers.IO) {
-            val affectedIds = database.setDone(id, done, System.currentTimeMillis())
+            val nowMillis = System.currentTimeMillis()
+            val affectedIds = database.setDone(id, done, nowMillis)
+            if (done) {
+                database.advanceActiveRoutinesForTasks(affectedIds, nowMillis)
+            }
             affectedIds.forEach { affectedId ->
                 reminderScheduler.cancel(affectedId)
                 if (!done) database.findById(affectedId)?.let(reminderScheduler::schedule)
@@ -141,6 +151,59 @@ class TaskRepository(
         }
     }
 
+    suspend fun saveRoutine(
+        id: Long?,
+        name: String,
+        frequency: RoutineFrequency,
+        nextRunAt: Long,
+        taskIds: List<Long>,
+    ) = writeMutex.withLock {
+        withContext(Dispatchers.IO) {
+            val cleanName = name.trim()
+            require(cleanName.isNotEmpty()) { "A routine name is required" }
+            require(taskIds.isNotEmpty()) { "Choose at least one task" }
+            id?.let(routineScheduler::cancel)
+            val savedId = database.saveRoutine(
+                id = id,
+                name = cleanName,
+                frequency = frequency,
+                nextRunAt = nextRunAt,
+                taskIds = taskIds,
+                nowMillis = System.currentTimeMillis(),
+            )
+            database.getRoutines().firstOrNull { it.id == savedId }?.let(routineScheduler::schedule)
+            refresh()
+        }
+    }
+
+    suspend fun setRoutineEnabled(routineId: Long, enabled: Boolean) = writeMutex.withLock {
+        withContext(Dispatchers.IO) {
+            routineScheduler.cancel(routineId)
+            database.setRoutineEnabled(routineId, enabled, System.currentTimeMillis())
+            if (enabled) {
+                database.getRoutines().firstOrNull { it.id == routineId }
+                    ?.let(routineScheduler::schedule)
+            }
+            refresh()
+        }
+    }
+
+    suspend fun activateRoutine(routineId: Long, scheduledAt: Long) = writeMutex.withLock {
+        withContext(Dispatchers.IO) {
+            database.activateRoutine(routineId, scheduledAt, System.currentTimeMillis())
+            database.getRoutines().firstOrNull { it.id == routineId }
+                ?.let(routineScheduler::schedule)
+            refresh()
+        }
+    }
+
+    suspend fun startRoutine(runId: Long) = writeMutex.withLock {
+        withContext(Dispatchers.IO) {
+            database.startRoutineRun(runId, System.currentTimeMillis())
+            refresh()
+        }
+    }
+
     suspend fun refresh() = withContext(Dispatchers.IO) {
         val currentObjectives = database.getObjectives()
         val currentTasks = database.getAll()
@@ -148,6 +211,13 @@ class TaskRepository(
         _tasks.value = currentTasks
         _timeEntries.value = database.getTimeEntries()
         _reusableTasks.value = database.getReusableTasks()
-        taskStateNotifier.sync(currentTasks)
+        _routines.value = database.getRoutines()
+        val currentRoutineProgress = database.getActiveRoutineProgress()
+        _routineProgress.value = currentRoutineProgress
+        taskStateNotifier.sync(
+            tasks = currentTasks,
+            routineProgress = currentRoutineProgress,
+            readyRoutineProgress = database.getReadyRoutineProgress(),
+        )
     }
 }
