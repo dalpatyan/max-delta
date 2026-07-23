@@ -70,6 +70,15 @@ internal fun TaskCard(
                         fontWeight = FontWeight.SemiBold,
                         textDecoration = if (task.isDone) TextDecoration.LineThrough else null,
                     )
+                    if (task.note.isNotBlank()) {
+                        Spacer(Modifier.height(3.dp))
+                        Text(
+                            text = task.note,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 3,
+                        )
+                    }
                     task.reminderAt?.let {
                         Spacer(Modifier.height(4.dp))
                         Text(
@@ -159,6 +168,14 @@ private fun SubtaskRow(
                         fontWeight = FontWeight.Medium,
                         textDecoration = if (task.isDone) TextDecoration.LineThrough else null,
                     )
+                    if (task.note.isNotBlank()) {
+                        Text(
+                            task.note,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2,
+                        )
+                    }
                     task.reminderAt?.let {
                         Text(
                             formatReminder(it),

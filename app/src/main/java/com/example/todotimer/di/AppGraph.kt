@@ -3,6 +3,7 @@ package com.example.todotimer.di
 import android.content.Context
 import com.example.todotimer.data.TaskDatabase
 import com.example.todotimer.data.TaskRepository
+import com.example.todotimer.reminder.LongTimerReminderScheduler
 import com.example.todotimer.reminder.ReminderScheduler
 import com.example.todotimer.reminder.RoutineScheduler
 import com.example.todotimer.system.TaskStateNotifier
@@ -24,6 +25,7 @@ object AppGraph {
         repositoryInstance ?: TaskRepository(
             database = database(context),
             reminderScheduler = ReminderScheduler(context.applicationContext),
+            longTimerReminderScheduler = LongTimerReminderScheduler(context.applicationContext),
             routineScheduler = RoutineScheduler(context.applicationContext),
             taskStateNotifier = TaskStateNotifier(context.applicationContext),
         ).also {

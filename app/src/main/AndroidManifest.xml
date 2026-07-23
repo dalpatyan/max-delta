@@ -35,6 +35,10 @@
             android:exported="false" />
 
         <receiver
+            android:name=".reminder.LongTimerReminderReceiver"
+            android:exported="false" />
+
+        <receiver
             android:name=".reminder.RoutineAlarmReceiver"
             android:exported="false" />
 

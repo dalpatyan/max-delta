@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -21,6 +22,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -63,6 +65,7 @@ internal fun ObjectiveListSection(
     var searchQuery by rememberSaveable { mutableStateOf("") }
     var selectedTag by rememberSaveable { mutableStateOf<String?>(null) }
     var showClosed by rememberSaveable { mutableStateOf(false) }
+    var filtersExpanded by rememberSaveable { mutableStateOf(false) }
     var sortOrderName by rememberSaveable {
         mutableStateOf(ObjectiveSortOrder.RECENTLY_ADDED.name)
     }
@@ -125,6 +128,8 @@ internal fun ObjectiveListSection(
                 ObjectiveFilters(
                     query = searchQuery,
                     onQueryChange = { searchQuery = it },
+                    expanded = filtersExpanded,
+                    onExpandedChange = { filtersExpanded = it },
                     tags = availableTags,
                     selectedTag = selectedTag,
                     onTagSelected = { selectedTag = it },
@@ -192,6 +197,8 @@ internal fun ObjectiveListSection(
 private fun ObjectiveFilters(
     query: String,
     onQueryChange: (String) -> Unit,
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
     tags: List<String>,
     selectedTag: String?,
     onTagSelected: (String?) -> Unit,
@@ -207,81 +214,102 @@ private fun ObjectiveFilters(
         color = MaterialTheme.colorScheme.surfaceContainer,
         shape = MaterialTheme.shapes.large,
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            OutlinedTextField(
-                value = query,
-                onValueChange = onQueryChange,
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("Search objectives") },
-                placeholder = { Text("Type an objective name") },
-                singleLine = true,
-            )
-            Spacer(Modifier.height(12.dp))
-            Text(
-                "Sort objectives",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(6.dp))
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                ObjectiveSortOrder.entries.forEach { order ->
-                    FilterChip(
-                        selected = sortOrder == order,
-                        onClick = { onSortOrderChange(order) },
-                        label = { Text(order.label) },
-                    )
-                }
-            }
-            Spacer(Modifier.height(12.dp))
+        Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("Show closed", style = MaterialTheme.typography.labelLarge)
-                    Text(
-                        closedWorkSummary(closedObjectiveCount, closedActionCount),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = onQueryChange,
+                    modifier = Modifier.weight(1f),
+                    placeholder = { Text("Search objectives") },
+                    singleLine = true,
+                )
+                Spacer(Modifier.width(4.dp))
+                TextButton(onClick = { onExpandedChange(!expanded) }) {
+                    Text(if (expanded) "Done" else "Filter")
                 }
-                Switch(
-                    checked = showClosed,
-                    onCheckedChange = onShowClosedChange,
+            }
+            if (!expanded && (selectedTag != null || showClosed ||
+                    sortOrder != ObjectiveSortOrder.RECENTLY_ADDED)
+            ) {
+                Text(
+                    buildString {
+                        append(sortOrder.label)
+                        selectedTag?.let { append(" • #$it") }
+                        if (showClosed) append(" • Closed shown")
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 1,
                 )
             }
-            if (tags.isNotEmpty()) {
-                Spacer(Modifier.height(12.dp))
+            if (expanded) {
+                Spacer(Modifier.height(8.dp))
                 Text(
-                    "Filter by tag",
+                    "Sort",
                     style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Spacer(Modifier.height(6.dp))
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    FilterChip(
-                        selected = selectedTag == null,
-                        onClick = { onTagSelected(null) },
-                        label = { Text("All") },
-                    )
-                    tags.forEach { tag ->
+                    ObjectiveSortOrder.entries.forEach { order ->
                         FilterChip(
-                            selected = selectedTag.equals(tag, ignoreCase = true),
-                            onClick = { onTagSelected(tag) },
-                            label = { Text(tag) },
+                            selected = sortOrder == order,
+                            onClick = { onSortOrderChange(order) },
+                            label = { Text(order.label) },
                         )
                     }
+                }
+                if (tags.isNotEmpty()) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "Tag",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        FilterChip(
+                            selected = selectedTag == null,
+                            onClick = { onTagSelected(null) },
+                            label = { Text("All") },
+                        )
+                        tags.forEach { tag ->
+                            FilterChip(
+                                selected = selectedTag.equals(tag, ignoreCase = true),
+                                onClick = { onTagSelected(tag) },
+                                label = { Text(tag) },
+                            )
+                        }
+                    }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Show closed", style = MaterialTheme.typography.labelLarge)
+                        Text(
+                            closedWorkSummary(closedObjectiveCount, closedActionCount),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = showClosed,
+                        onCheckedChange = onShowClosedChange,
+                    )
                 }
             }
         }

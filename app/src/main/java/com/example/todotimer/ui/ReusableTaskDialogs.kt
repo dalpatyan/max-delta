@@ -1,5 +1,6 @@
 package com.example.todotimer.ui
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -8,10 +9,14 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
@@ -30,6 +35,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.example.todotimer.data.Objective
 import com.example.todotimer.data.ReusableTask
+import com.example.todotimer.data.Routine
 
 @Composable
 internal fun ReusableTaskDialog(
@@ -87,11 +93,14 @@ internal fun ReusableTaskDialog(
 @Composable
 internal fun QuickAddTaskDialog(
     objectives: List<Objective>,
+    routines: List<Routine>,
     onDismiss: () -> Unit,
-    onSave: (Objective, String) -> Unit,
+    onSave: (Objective, String, String, Set<Long>) -> Unit,
 ) {
     var title by remember { mutableStateOf("") }
+    var note by remember { mutableStateOf("") }
     var selectedObjectiveId by remember { mutableStateOf<Long?>(null) }
+    var selectedRoutineIds by remember { mutableStateOf(emptySet<Long>()) }
     var objectiveMenuExpanded by remember { mutableStateOf(false) }
     val selectedObjective = objectives.firstOrNull { it.id == selectedObjectiveId }
 
@@ -105,13 +114,25 @@ internal fun QuickAddTaskDialog(
         onDismissRequest = onDismiss,
         title = { Text("Quick add task") },
         text = {
-            Column {
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 560.dp)
+                    .verticalScroll(rememberScrollState()),
+            ) {
                 OutlinedTextField(
                     value = title,
                     onValueChange = { title = it },
                     modifier = Modifier.fillMaxWidth(),
                     label = { Text("Task") },
                     placeholder = { Text("What needs to be done?") },
+                    maxLines = 3,
+                )
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = note,
+                    onValueChange = { note = it.take(280) },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Short note (optional)") },
                     maxLines = 3,
                 )
                 Spacer(Modifier.height(12.dp))
@@ -144,11 +165,47 @@ internal fun QuickAddTaskDialog(
                         }
                     }
                 }
+                if (routines.isNotEmpty()) {
+                    Spacer(Modifier.height(12.dp))
+                    Text("Add to routine (optional)", style = MaterialTheme.typography.labelLarge)
+                    routines.forEach { routine ->
+                        val selected = routine.id in selectedRoutineIds
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    selectedRoutineIds = if (selected) {
+                                        selectedRoutineIds - routine.id
+                                    } else {
+                                        selectedRoutineIds + routine.id
+                                    }
+                                }
+                                .padding(vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Checkbox(
+                                checked = selected,
+                                onCheckedChange = { checked ->
+                                    selectedRoutineIds = if (checked) {
+                                        selectedRoutineIds + routine.id
+                                    } else {
+                                        selectedRoutineIds - routine.id
+                                    }
+                                },
+                            )
+                            Text(routine.name)
+                        }
+                    }
+                }
             }
         },
         confirmButton = {
             TextButton(
-                onClick = { selectedObjective?.let { onSave(it, title.trim()) } },
+                onClick = {
+                    selectedObjective?.let {
+                        onSave(it, title.trim(), note.trim(), selectedRoutineIds)
+                    }
+                },
                 enabled = title.isNotBlank() && selectedObjective != null,
             ) { Text("Add") }
         },

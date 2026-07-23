@@ -1,7 +1,7 @@
 <resources>
     <string name="app_name">Max Δ</string>
     <string name="reminder_channel_name">Task reminders</string>
-    <string name="reminder_channel_description">Notifications for task and subtask reminders</string>
+    <string name="reminder_channel_description">Task reminders and one-hour timer check-ins</string>
     <string name="timer_channel_name">Active task timer</string>
     <string name="timer_channel_description">Persistent progress while a task timer is running</string>
     <string name="routine_channel_name">Routine reminders</string>

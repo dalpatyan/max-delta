@@ -5,6 +5,7 @@ data class TaskItem(
     val objectiveId: Long,
     val parentTaskId: Long?,
     val title: String,
+    val note: String = "",
     val reminderAt: Long?,
     val isDone: Boolean,
     val createdAt: Long,
@@ -12,6 +13,7 @@ data class TaskItem(
     val trackedMillis: Long,
     val timerStartedAt: Long?,
     val timerRoutineRunId: Long? = null,
+    val longTimerRemindedAt: Long? = null,
     val updatedAt: Long = createdAt,
 ) {
     val isSubtask: Boolean get() = parentTaskId != null
