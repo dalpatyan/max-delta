@@ -164,6 +164,15 @@ private fun OngoingActionCard(
             )
             Spacer(Modifier.height(4.dp))
             Text(task.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            if (task.note.isNotBlank()) {
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    task.note,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 3,
+                )
+            }
             objective?.let {
                 Spacer(Modifier.height(4.dp))
                 Text(

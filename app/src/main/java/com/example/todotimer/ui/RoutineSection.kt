@@ -26,6 +26,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.todotimer.data.Routine
+import com.example.todotimer.data.RoutineFrequency
 import com.example.todotimer.data.RoutineProgress
 import com.example.todotimer.data.TaskItem
 import java.time.Instant
@@ -75,7 +76,7 @@ internal fun RoutineSection(
                     shape = MaterialTheme.shapes.large,
                 ) {
                     Text(
-                        "No routines yet. Group existing tasks into a daily, weekly, or monthly sequence.",
+                        "No routines yet. Group tasks into a repeating sequence on the schedule you choose.",
                         modifier = Modifier.padding(20.dp),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -154,7 +155,7 @@ private fun RoutineCard(
                 Column(modifier = Modifier.weight(1f)) {
                     Text(routine.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     Text(
-                        "${routine.frequency.label} • ${formatRoutineTime(routine.nextRunAt)}",
+                        "${routineScheduleLabel(routine)} • ${formatRoutineTime(routine.nextRunAt)}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -193,3 +194,13 @@ private fun RoutineCard(
 private fun formatRoutineTime(epochMillis: Long): String = Instant.ofEpochMilli(epochMillis)
     .atZone(ZoneId.systemDefault())
     .format(DateTimeFormatter.ofPattern("d MMM, h:mm a"))
+
+private fun routineScheduleLabel(routine: Routine): String {
+    if (routine.frequency != RoutineFrequency.CUSTOM) return routine.frequency.label
+    return routine.customDays
+        .sortedBy { day -> (day.value % 7) }
+        .joinToString(", ") { day ->
+            day.name.take(3).lowercase().replaceFirstChar { it.uppercase() }
+        }
+        .ifBlank { "Custom" }
+}

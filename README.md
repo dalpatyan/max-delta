@@ -13,7 +13,8 @@ A local-first Android productivity app organized as Objective → Task → Subta
 - Review total, objective-wise, and action-wise time for today, this week, this month, or a custom date range.
 - Download the selected date range as an Excel-friendly CSV file.
 - Save a task and its subtasks as a reusable template, then add a fresh copy to any objective.
-- Create daily, weekly, or monthly routines from existing tasks and choose their exact order.
+- Create daily, weekly, monthly, or custom-weekday routines and choose their exact task order.
+- Add a new task or subtask directly to one or more routines while creating it.
 - Reopen routine tasks automatically at the scheduled time and start the first task from its notification.
 - Advance a routine from the persistent notification with Mark done and Start tracking actions.
 - Divide each objective into tasks and each task into optional subtasks.
@@ -23,7 +24,11 @@ A local-first Android productivity app organized as Objective → Task → Subta
 - Receive reminder notifications, including after the phone restarts.
 - Start and stop a persistent timer on each task or subtask.
 - Keep the active timer visible in an ongoing notification with Stop working and Mark done actions.
+- Receive a one-hour check-in notification when a timer keeps running.
+- Add a short note to any task or subtask.
+- Correct a running timer's start time, add time manually, and edit or delete completed time entries.
 - Add home-screen widgets for pending tasks and quick task creation.
+- Fit the quick-add widget into a compact 1×1 home-screen cell.
 - See live elapsed time and cumulative tracked time.
 - See subtask completion progress on each parent task.
 - Light and dark themes, including Android dynamic color.
@@ -40,7 +45,9 @@ A local-first Android productivity app organized as Objective → Task → Subta
 - Existing cumulative time is preserved during migration and backfilled as historical session data using the action's last known update.
 - Reusable templates copy task/subtask titles only; reminders, completion state, and logged time start fresh.
 - Routine schedules reuse existing tasks instead of creating duplicates. Each occurrence reopens the selected tasks and follows the saved order.
+- Custom routines can run on any user-selected combination of Sunday through Saturday.
 - Timer sessions started through a routine retain routine attribution; Analytics separates routine work from objective work without double counting.
+- Manual time edits update both cumulative task time and date-range analytics; routine attribution is preserved when an attributed session is edited.
 - CSV downloads use Android's document picker and do not require storage permission.
 - Only one timer can run at once. Starting another timer first saves and stops the active one.
 - Completing a task completes its subtasks and stops all related timers.
@@ -56,7 +63,7 @@ A local-first Android productivity app organized as Objective → Task → Subta
 4. Select an Android 8.0 (API 26) or newer emulator/device.
 5. Click **Run**.
 
-The project uses Kotlin, Jetpack Compose, Material 3, `SQLiteOpenHelper`, `AlarmManager`, and Android home-screen widgets. It does not require a backend or API key. Upgrading preserves existing data; version 1 tasks are grouped under an “Imported tasks” objective, and pre-tag objectives start with no tags.
+The project uses Kotlin, Jetpack Compose, Material 3, `SQLiteOpenHelper`, `AlarmManager`, and Android home-screen widgets. It does not require a backend or API key. Upgrading preserves existing data; version 1 tasks are grouped under an “Imported tasks” objective, pre-tag objectives start with no tags, and the v1.7 database migration adds notes, custom routine days, and long-timer reminder state in place.
 
 ## Build commands
 

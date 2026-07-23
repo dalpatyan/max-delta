@@ -17,6 +17,7 @@ class ReminderRescheduleReceiver : BroadcastReceiver() {
             try {
                 val scheduler = ReminderScheduler(context)
                 val routineScheduler = RoutineScheduler(context)
+                val longTimerReminderScheduler = LongTimerReminderScheduler(context)
                 AppGraph.database(context)
                     .getUpcomingReminders(System.currentTimeMillis())
                     .forEach(scheduler::schedule)
@@ -24,6 +25,10 @@ class ReminderRescheduleReceiver : BroadcastReceiver() {
                     .getRoutines()
                     .filter { it.isEnabled }
                     .forEach(routineScheduler::schedule)
+                AppGraph.database(context)
+                    .getAll()
+                    .filter { it.isTimerRunning }
+                    .forEach(longTimerReminderScheduler::schedule)
                 AppGraph.repository(context).refresh()
             } finally {
                 pendingResult.finish()

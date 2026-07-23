@@ -41,6 +41,7 @@ import com.example.todotimer.data.TaskItem
 import com.example.todotimer.data.TimeEntry
 import com.example.todotimer.util.TimeTracking
 import kotlinx.coroutines.delay
+import java.time.DayOfWeek
 
 private enum class AppSection(val label: String, val symbol: String) {
     OBJECTIVES("Objectives", "◎"),
@@ -74,7 +75,7 @@ fun TodoScreen(
     onRequestNotificationPermission: () -> Unit,
     onRequestExactAlarmPermission: () -> Unit,
     onSaveObjective: (Long?, String, List<String>) -> Unit,
-    onSaveTask: (Long?, Long, Long?, String, Long?) -> Unit,
+    onSaveTask: (Long?, Long, Long?, String, String, Long?, Set<Long>) -> Unit,
     onSetDone: (TaskItem, Boolean) -> Unit,
     onToggleTimer: (TaskItem) -> Unit,
     onDeleteTask: (TaskItem) -> Unit,
@@ -82,9 +83,19 @@ fun TodoScreen(
     onSaveReusableTask: (TaskItem) -> Unit,
     onUseReusableTask: (ReusableTask, Objective) -> Unit,
     onDeleteReusableTask: (ReusableTask) -> Unit,
-    onSaveRoutine: (Long?, String, RoutineFrequency, Long, List<Long>) -> Unit,
+    onSaveRoutine: (
+        Long?,
+        String,
+        RoutineFrequency,
+        Long,
+        Set<DayOfWeek>,
+        List<Long>,
+    ) -> Unit,
     onSetRoutineEnabled: (Routine, Boolean) -> Unit,
     onStartRoutine: (RoutineProgress) -> Unit,
+    onUpdateRunningTimerStart: (TaskItem, Long) -> Unit,
+    onSaveTimeEntry: (Long?, Long, Long, Long) -> Unit,
+    onDeleteTimeEntry: (TimeEntry) -> Unit,
     onDownloadAnalytics: (AnalyticsRange) -> Unit,
 ) {
     val focusManager = LocalFocusManager.current
@@ -97,6 +108,7 @@ fun TodoScreen(
     var objectiveDeleteTarget by remember { mutableStateOf<Objective?>(null) }
     var reusableObjective by remember { mutableStateOf<Objective?>(null) }
     var routineEditorTarget by remember { mutableStateOf<RoutineEditorTarget?>(null) }
+    var timeLogTaskId by remember { mutableStateOf<Long?>(null) }
     var quickAddVisible by remember { mutableStateOf(false) }
     val nowMillis by produceState(initialValue = System.currentTimeMillis()) {
         while (true) {
@@ -287,14 +299,17 @@ fun TodoScreen(
         TaskEditorDialog(
             existing = target.task,
             isSubtask = target.parentTaskId != null,
+            routines = routines,
             onDismiss = { taskEditorTarget = null },
-            onSave = { title, reminderAt ->
+            onSave = { title, note, reminderAt, routineIds ->
                 onSaveTask(
                     target.task?.id,
                     target.objectiveId,
                     target.parentTaskId,
                     title,
+                    note,
                     reminderAt,
+                    routineIds,
                 )
                 taskEditorTarget = null
             },
@@ -312,6 +327,12 @@ fun TodoScreen(
                         taskEditorTarget = null
                     }
                 },
+            onManageTime = target.task?.let { task ->
+                {
+                    taskEditorTarget = null
+                    timeLogTaskId = task.id
+                }
+            },
         )
     }
 
@@ -331,9 +352,10 @@ fun TodoScreen(
     if (quickAddVisible) {
         QuickAddTaskDialog(
             objectives = objectives,
+            routines = routines,
             onDismiss = { quickAddVisible = false },
-            onSave = { objective, title ->
-                onSaveTask(null, objective.id, null, title, null)
+            onSave = { objective, title, note, routineIds ->
+                onSaveTask(null, objective.id, null, title, note, null, routineIds)
                 quickAddVisible = false
             },
         )
@@ -345,11 +367,35 @@ fun TodoScreen(
             objectives = objectives,
             tasks = tasks,
             onDismiss = { routineEditorTarget = null },
-            onSave = { name, frequency, nextRunAt, taskIds ->
-                onSaveRoutine(target.routine?.id, name, frequency, nextRunAt, taskIds)
+            onSave = { name, frequency, nextRunAt, customDays, taskIds ->
+                onSaveRoutine(
+                    target.routine?.id,
+                    name,
+                    frequency,
+                    nextRunAt,
+                    customDays,
+                    taskIds,
+                )
                 routineEditorTarget = null
             },
         )
+    }
+
+    timeLogTaskId?.let { taskId ->
+        tasks.firstOrNull { it.id == taskId }?.let { task ->
+            TimeLogDialog(
+                task = task,
+                timeEntries = timeEntries,
+                onDismiss = { timeLogTaskId = null },
+                onUpdateRunningStart = { startedAt ->
+                    onUpdateRunningTimerStart(task, startedAt)
+                },
+                onSaveEntry = { entryId, startedAt, endedAt ->
+                    onSaveTimeEntry(entryId, task.id, startedAt, endedAt)
+                },
+                onDeleteEntry = onDeleteTimeEntry,
+            )
+        }
     }
 
     taskDeleteTarget?.let { task ->

@@ -13,6 +13,7 @@ import com.example.todotimer.data.TimeEntry
 import com.example.todotimer.di.AppGraph
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import java.time.DayOfWeek
 
 class TaskViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = AppGraph.repository(application)
@@ -28,10 +29,20 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
         objectiveId: Long,
         parentTaskId: Long?,
         title: String,
+        note: String,
         reminderAt: Long?,
+        routineIds: Set<Long> = emptySet(),
     ) {
         viewModelScope.launch {
-            repository.saveTask(id, objectiveId, parentTaskId, title, reminderAt)
+            repository.saveTask(
+                id = id,
+                objectiveId = objectiveId,
+                parentTaskId = parentTaskId,
+                title = title,
+                note = note,
+                reminderAt = reminderAt,
+                routineIds = routineIds,
+            )
         }
     }
 
@@ -75,11 +86,31 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
         name: String,
         frequency: RoutineFrequency,
         nextRunAt: Long,
+        customDays: Set<DayOfWeek>,
         taskIds: List<Long>,
     ) {
         viewModelScope.launch {
-            repository.saveRoutine(id, name, frequency, nextRunAt, taskIds)
+            repository.saveRoutine(id, name, frequency, nextRunAt, customDays, taskIds)
         }
+    }
+
+    fun updateRunningTimerStart(item: TaskItem, startedAt: Long) {
+        viewModelScope.launch { repository.updateRunningTimerStart(item.id, startedAt) }
+    }
+
+    fun saveTimeEntry(
+        id: Long?,
+        taskId: Long,
+        startedAt: Long,
+        endedAt: Long,
+    ) {
+        viewModelScope.launch {
+            repository.saveTimeEntry(id, taskId, startedAt, endedAt)
+        }
+    }
+
+    fun deleteTimeEntry(entry: TimeEntry) {
+        viewModelScope.launch { repository.deleteTimeEntry(entry) }
     }
 
     fun setRoutineEnabled(routine: Routine, enabled: Boolean) {

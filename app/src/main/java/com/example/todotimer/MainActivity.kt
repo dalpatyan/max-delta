@@ -165,6 +165,9 @@ private fun TodoApp(
         onSaveRoutine = viewModel::saveRoutine,
         onSetRoutineEnabled = viewModel::setRoutineEnabled,
         onStartRoutine = viewModel::startRoutine,
+        onUpdateRunningTimerStart = viewModel::updateRunningTimerStart,
+        onSaveTimeEntry = viewModel::saveTimeEntry,
+        onDeleteTimeEntry = viewModel::deleteTimeEntry,
         onDownloadAnalytics = { range ->
             pendingAnalyticsCsv.value = AnalyticsCsv.build(
                 objectives = objectives,

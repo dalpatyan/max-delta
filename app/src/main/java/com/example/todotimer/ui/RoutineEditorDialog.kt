@@ -38,6 +38,7 @@ import com.example.todotimer.data.RoutineFrequency
 import com.example.todotimer.data.RoutineOrdering
 import com.example.todotimer.data.TaskItem
 import java.time.Instant
+import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.ZoneId
@@ -49,7 +50,7 @@ internal fun RoutineEditorDialog(
     objectives: List<Objective>,
     tasks: List<TaskItem>,
     onDismiss: () -> Unit,
-    onSave: (String, RoutineFrequency, Long, List<Long>) -> Unit,
+    onSave: (String, RoutineFrequency, Long, Set<DayOfWeek>, List<Long>) -> Unit,
 ) {
     val context = LocalContext.current
     val zoneId = ZoneId.systemDefault()
@@ -64,6 +65,13 @@ internal fun RoutineEditorDialog(
     var scheduledDate by remember(existing?.id) { mutableStateOf(initialDateTime.toLocalDate()) }
     var scheduledTime by remember(existing?.id) {
         mutableStateOf(initialDateTime.toLocalTime().withSecond(0).withNano(0))
+    }
+    var customDays by remember(existing?.id) {
+        mutableStateOf(
+            existing?.customDays
+                ?.takeIf { it.isNotEmpty() }
+                ?: setOf(initialDateTime.dayOfWeek),
+        )
     }
     var selectedTaskIds by remember(existing?.id) {
         mutableStateOf(existing?.taskIds?.filter { id -> tasks.any { it.id == id } }.orEmpty())
@@ -106,6 +114,44 @@ internal fun RoutineEditorDialog(
                             selected = frequency == option,
                             onClick = { frequency = option },
                             label = { Text(option.label) },
+                        )
+                    }
+                }
+                if (frequency == RoutineFrequency.CUSTOM) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Run on",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Row(
+                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        customDayOrder.forEach { day ->
+                            FilterChip(
+                                selected = day in customDays,
+                                onClick = {
+                                    customDays = if (day in customDays) {
+                                        customDays - day
+                                    } else {
+                                        customDays + day
+                                    }
+                                },
+                                label = {
+                                    Text(
+                                        day.name.take(3).lowercase()
+                                            .replaceFirstChar { it.uppercase() },
+                                    )
+                                },
+                            )
+                        }
+                    }
+                    if (customDays.isEmpty()) {
+                        Text(
+                            "Choose at least one day.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
                         )
                     }
                 }
@@ -210,10 +256,24 @@ internal fun RoutineEditorDialog(
         },
         confirmButton = {
             TextButton(
-                onClick = { onSave(name.trim(), frequency, scheduledAt, selectedTaskIds) },
-                enabled = name.isNotBlank() && selectedTaskIds.isNotEmpty(),
+                onClick = {
+                    onSave(name.trim(), frequency, scheduledAt, customDays, selectedTaskIds)
+                },
+                enabled = name.isNotBlank() &&
+                    selectedTaskIds.isNotEmpty() &&
+                    (frequency != RoutineFrequency.CUSTOM || customDays.isNotEmpty()),
             ) { Text("Save") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
+
+private val customDayOrder = listOf(
+    DayOfWeek.SUNDAY,
+    DayOfWeek.MONDAY,
+    DayOfWeek.TUESDAY,
+    DayOfWeek.WEDNESDAY,
+    DayOfWeek.THURSDAY,
+    DayOfWeek.FRIDAY,
+    DayOfWeek.SATURDAY,
+)
