@@ -8,8 +8,7 @@ val stableDebugKeystore = file("maxdelta-debug.keystore")
 
 android {
     namespace = "com.example.todotimer"
-    compileSdk = 35
-    buildToolsVersion = "35.0.0"
+    compileSdk = 36
 
     signingConfigs {
         getByName("debug") {
@@ -23,13 +22,28 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.example.todotimer"
+        applicationId = "com.ugtech.maxdelta"
         minSdk = 26
-        targetSdk = 35
-        versionCode = 8
-        versionName = "1.7.0"
+        targetSdk = 36
+        versionCode = 9
+        versionName = "1.8.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    flavorDimensions += "distribution"
+    productFlavors {
+        create("play") {
+            dimension = "distribution"
+            applicationId = "com.ugtech.maxdelta"
+            buildConfigField("String", "DISTRIBUTION_LABEL", "\"Google Play\"")
+        }
+        create("legacy") {
+            dimension = "distribution"
+            applicationId = "com.example.todotimer"
+            versionNameSuffix = "-migration"
+            buildConfigField("String", "DISTRIBUTION_LABEL", "\"Data migration\"")
+        }
     }
 
     buildTypes {

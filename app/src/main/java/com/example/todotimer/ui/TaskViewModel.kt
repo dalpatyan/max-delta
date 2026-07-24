@@ -13,6 +13,8 @@ import com.example.todotimer.data.TimeEntry
 import com.example.todotimer.di.AppGraph
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import java.io.InputStream
+import java.io.OutputStream
 import java.time.DayOfWeek
 
 class TaskViewModel(application: Application) : AndroidViewModel(application) {
@@ -119,6 +121,14 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
 
     fun startRoutine(progress: RoutineProgress) {
         viewModelScope.launch { repository.startRoutine(progress.runId) }
+    }
+
+    suspend fun exportBackup(output: OutputStream, password: CharArray) {
+        repository.exportBackup(output, password)
+    }
+
+    suspend fun restoreBackup(input: InputStream, password: CharArray) {
+        repository.restoreBackup(input, password)
     }
 
     fun refresh() {
