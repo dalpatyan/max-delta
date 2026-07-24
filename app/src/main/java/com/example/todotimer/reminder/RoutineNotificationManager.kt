@@ -44,7 +44,21 @@ class RoutineNotificationManager(context: Context) {
             .setAutoCancel(false)
             .addAction(0, "Start routine", startRoutineIntent(progress.runId))
             .build()
-        NotificationManagerCompat.from(appContext).notify(NOTIFICATION_ID, notification)
+        if (
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(
+                appContext,
+                Manifest.permission.POST_NOTIFICATIONS,
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            NotificationManagerCompat.from(appContext).cancel(NOTIFICATION_ID)
+            return
+        }
+        try {
+            NotificationManagerCompat.from(appContext).notify(NOTIFICATION_ID, notification)
+        } catch (_: SecurityException) {
+            NotificationManagerCompat.from(appContext).cancel(NOTIFICATION_ID)
+        }
     }
 
     private fun openRoutinesIntent(): PendingIntent {

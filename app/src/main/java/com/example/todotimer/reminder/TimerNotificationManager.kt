@@ -62,7 +62,21 @@ class TimerNotificationManager(context: Context) {
                 }
             }
             .build()
-        NotificationManagerCompat.from(appContext).notify(NOTIFICATION_ID, notification)
+        if (
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(
+                appContext,
+                Manifest.permission.POST_NOTIFICATIONS,
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            cancel()
+            return
+        }
+        try {
+            NotificationManagerCompat.from(appContext).notify(NOTIFICATION_ID, notification)
+        } catch (_: SecurityException) {
+            cancel()
+        }
     }
 
     private fun notificationTitle(
