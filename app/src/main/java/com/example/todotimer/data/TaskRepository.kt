@@ -14,6 +14,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import java.io.InputStream
+import java.io.OutputStream
 import java.time.DayOfWeek
 
 class TaskRepository(
@@ -299,6 +301,55 @@ class TaskRepository(
         }
     }
 
+    suspend fun exportBackup(output: OutputStream, password: CharArray) = writeMutex.withLock {
+        withContext(Dispatchers.IO) {
+            require(password.size >= MIN_BACKUP_PASSWORD_LENGTH) {
+                "Use a password with at least $MIN_BACKUP_PASSWORD_LENGTH characters."
+            }
+            database.exportEncryptedBackup(output, password)
+        }
+    }
+
+    suspend fun restoreBackup(input: InputStream, password: CharArray) = writeMutex.withLock {
+        withContext(Dispatchers.IO) {
+            require(password.size >= MIN_BACKUP_PASSWORD_LENGTH) {
+                "Enter the backup password."
+            }
+            val previousTasks = database.getAll()
+            val previousRoutines = database.getRoutines()
+            cancelSchedules(previousTasks, previousRoutines)
+
+            try {
+                database.restoreEncryptedBackup(input, password)
+            } catch (error: Throwable) {
+                scheduleDatabaseState()
+                refresh()
+                throw error
+            }
+
+            scheduleDatabaseState()
+            refresh()
+        }
+    }
+
+    private fun cancelSchedules(tasks: List<TaskItem>, routines: List<Routine>) {
+        tasks.forEach { task ->
+            reminderScheduler.cancel(task.id)
+            longTimerReminderScheduler.cancel(task.id)
+        }
+        routines.forEach { routine -> routineScheduler.cancel(routine.id) }
+    }
+
+    private fun scheduleDatabaseState() {
+        database.getAll().forEach { task ->
+            reminderScheduler.schedule(task)
+            if (task.isTimerRunning) longTimerReminderScheduler.schedule(task)
+        }
+        database.getRoutines()
+            .filter { it.isEnabled }
+            .forEach(routineScheduler::schedule)
+    }
+
     suspend fun refresh() = withContext(Dispatchers.IO) {
         val currentObjectives = database.getObjectives()
         val currentTasks = database.getAll()
@@ -314,5 +365,9 @@ class TaskRepository(
             routineProgress = currentRoutineProgress,
             readyRoutineProgress = database.getReadyRoutineProgress(),
         )
+    }
+
+    private companion object {
+        const val MIN_BACKUP_PASSWORD_LENGTH = 8
     }
 }

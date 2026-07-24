@@ -29,6 +29,7 @@ A local-first Android productivity app organized as Objective → Task → Subta
 - Correct a running timer's start time, add time manually, and edit or delete completed time entries.
 - Add home-screen widgets for pending tasks and quick task creation.
 - Fit the quick-add widget into a compact 1×1 home-screen cell.
+- Export and restore a password-encrypted full backup for device or package migration.
 - See live elapsed time and cumulative tracked time.
 - See subtask completion progress on each parent task.
 - Light and dark themes, including Android dynamic color.
@@ -49,6 +50,8 @@ A local-first Android productivity app organized as Objective → Task → Subta
 - Timer sessions started through a routine retain routine attribution; Analytics separates routine work from objective work without double counting.
 - Manual time edits update both cumulative task time and date-range analytics; routine attribution is preserved when an attributed session is edited.
 - CSV downloads use Android's document picker and do not require storage permission.
+- Full backups are encrypted with AES-256-GCM and a password-derived key. Max Delta does not
+  store or recover the user's backup password.
 - Only one timer can run at once. Starting another timer first saves and stops the active one.
 - Completing a task completes its subtasks and stops all related timers.
 - Reopening a parent task does not automatically reopen its completed subtasks.
@@ -59,7 +62,7 @@ A local-first Android productivity app organized as Objective → Task → Subta
 
 1. Install a current Android Studio version with JDK 17.
 2. Open the `MaxDelta` folder as a project.
-3. Allow Android Studio to install Android SDK 35 if prompted and finish Gradle sync.
+3. Allow Android Studio to install Android SDK 36 if prompted and finish Gradle sync.
 4. Select an Android 8.0 (API 26) or newer emulator/device.
 5. Click **Run**.
 
@@ -70,16 +73,21 @@ The project uses Kotlin, Jetpack Compose, Material 3, `SQLiteOpenHelper`, `Alarm
 macOS/Linux:
 
 ```bash
-./gradlew testDebugUnitTest assembleDebug
+./gradlew testPlayDebugUnitTest testLegacyDebugUnitTest
+./gradlew bundlePlayRelease assembleLegacyRelease
 ```
 
 Windows:
 
 ```bat
-gradlew.bat testDebugUnitTest assembleDebug
+gradlew.bat testPlayDebugUnitTest testLegacyDebugUnitTest
+gradlew.bat bundlePlayRelease assembleLegacyRelease
 ```
 
-The debug APK will be created at `app/build/outputs/apk/debug/app-debug.apk`.
+The Play bundle uses the permanent application ID `com.ugtech.maxdelta`. The legacy migration APK
+uses `com.example.todotimer`, version code 9, so it can update v1.7 and export existing data before
+the Play app imports it. Release artifacts are deliberately unsigned in CI and must be signed
+outside the repository.
 
 Local builds use `app/maxdelta-debug.keystore` when that private file is present, allowing future debug APKs signed with the same key to update an existing installation. The keystore is intentionally excluded from version control: keep a secure private backup and never use it for a production or Play Store release. A fresh clone without that file falls back to the machine's standard Android debug key and cannot update an installation signed with a different key.
 
@@ -96,4 +104,6 @@ Because versions through 1.2 used a transient key that is no longer available, v
 
 ## Verification
 
-Pure unit tests cover cumulative time calculation, date-range overlap, routine recurrence and ordering, objective sorting, reusable templates, CSV output, clock rollback safety, and duration formatting. For reminder and routine QA, test once with precise alarms allowed and once denied to verify the fallback banner and behavior.
+Pure unit tests cover cumulative time calculation, date-range overlap, routine recurrence and ordering, objective sorting, reusable templates, CSV output, encrypted-backup authentication and tamper detection, clock rollback safety, and duration formatting. For reminder and routine QA, test once with precise alarms allowed and once denied to verify the fallback banner and behavior.
+
+Privacy policy: https://max-delta-privacy.gaurav-kumar-iimi.chatgpt.site

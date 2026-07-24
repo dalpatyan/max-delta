@@ -20,6 +20,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
@@ -32,6 +33,7 @@ import com.example.todotimer.reminder.ReminderScheduler
 import com.example.todotimer.ui.TaskViewModel
 import com.example.todotimer.ui.TodoScreen
 import com.example.todotimer.ui.theme.TodoTimerTheme
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private val viewModel: TaskViewModel by viewModels()
@@ -83,6 +85,10 @@ private fun TodoApp(
     var exactAlarmAllowed by remember {
         mutableStateOf(ReminderScheduler(context).hasExactAlarmAccess())
     }
+    val appScope = rememberCoroutineScope()
+    var backupBusy by remember { mutableStateOf(false) }
+    var pendingExportPassword by remember { mutableStateOf<String?>(null) }
+    var pendingRestorePassword by remember { mutableStateOf<String?>(null) }
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted -> notificationAllowed = granted }
@@ -102,6 +108,64 @@ private fun TodoApp(
                 if (result.isSuccess) "Analytics CSV saved" else "Could not save analytics CSV",
                 Toast.LENGTH_SHORT,
             ).show()
+        }
+    }
+    val backupExportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/octet-stream"),
+    ) { uri ->
+        val password = pendingExportPassword
+        pendingExportPassword = null
+        if (uri != null && password != null) {
+            backupBusy = true
+            appScope.launch {
+                val passwordChars = password.toCharArray()
+                val result = runCatching {
+                    context.contentResolver.openOutputStream(uri)?.use { output ->
+                        viewModel.exportBackup(output, passwordChars)
+                    } ?: error("Unable to open the selected file.")
+                }
+                passwordChars.fill('\u0000')
+                backupBusy = false
+                Toast.makeText(
+                    context,
+                    result.fold(
+                        onSuccess = { "Encrypted backup saved" },
+                        onFailure = { error ->
+                            "Backup failed: ${error.message ?: "unknown error"}"
+                        },
+                    ),
+                    Toast.LENGTH_LONG,
+                ).show()
+            }
+        }
+    }
+    val backupRestoreLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        val password = pendingRestorePassword
+        pendingRestorePassword = null
+        if (uri != null && password != null) {
+            backupBusy = true
+            appScope.launch {
+                val passwordChars = password.toCharArray()
+                val result = runCatching {
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        viewModel.restoreBackup(input, passwordChars)
+                    } ?: error("Unable to open the selected file.")
+                }
+                passwordChars.fill('\u0000')
+                backupBusy = false
+                Toast.makeText(
+                    context,
+                    result.fold(
+                        onSuccess = { "Backup restored successfully" },
+                        onFailure = { error ->
+                            "Restore failed: ${error.message ?: "unknown error"}"
+                        },
+                    ),
+                    Toast.LENGTH_LONG,
+                ).show()
+            }
         }
     }
 
@@ -182,6 +246,21 @@ private fun TodoApp(
                 "max-delta-time-${range.label.lowercase().replace(' ', '-')}-" +
                     java.time.LocalDate.now() + ".csv",
             )
+        },
+        backupBusy = backupBusy,
+        onExportBackup = { password ->
+            if (!backupBusy) {
+                pendingExportPassword = password
+                backupExportLauncher.launch(
+                    "max-delta-backup-${java.time.LocalDate.now()}.maxdelta",
+                )
+            }
+        },
+        onRestoreBackup = { password ->
+            if (!backupBusy) {
+                pendingRestorePassword = password
+                backupRestoreLauncher.launch(arrayOf("*/*"))
+            }
         },
     )
 }

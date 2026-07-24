@@ -9,6 +9,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -48,6 +49,7 @@ private enum class AppSection(val label: String, val symbol: String) {
     ROUTINES("Routines", "↻"),
     ONGOING("Ongoing", "▶"),
     ANALYTICS("Analytics", "Σ"),
+    SETTINGS("Settings", "⚙"),
 }
 
 private data class TaskEditorTarget(
@@ -97,6 +99,9 @@ fun TodoScreen(
     onSaveTimeEntry: (Long?, Long, Long, Long) -> Unit,
     onDeleteTimeEntry: (TimeEntry) -> Unit,
     onDownloadAnalytics: (AnalyticsRange) -> Unit,
+    backupBusy: Boolean,
+    onExportBackup: (String) -> Unit,
+    onRestoreBackup: (String) -> Unit,
 ) {
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -130,6 +135,7 @@ fun TodoScreen(
         AppSection.ROUTINES -> "${routines.count { it.isEnabled }} scheduled • ${routines.size} total"
         AppSection.ONGOING -> "$activeActions active • $openActions unfinished"
         AppSection.ANALYTICS -> TimeTracking.format(totalLogged) + " logged"
+        AppSection.SETTINGS -> "Backup, privacy, and app details"
     }
 
     androidx.compose.runtime.LaunchedEffect(launchAction) {
@@ -170,11 +176,18 @@ fun TodoScreen(
                         )
                     }
                 },
+                actions = {
+                    IconButton(onClick = { sectionName = AppSection.SETTINGS.name }) {
+                        Text(AppSection.SETTINGS.symbol)
+                    }
+                },
             )
         },
         bottomBar = {
             NavigationBar {
-                AppSection.entries.forEach { section ->
+                AppSection.entries
+                    .filterNot { it == AppSection.SETTINGS }
+                    .forEach { section ->
                     NavigationBarItem(
                         selected = section == currentSection,
                         onClick = { sectionName = section.name },
@@ -274,6 +287,13 @@ fun TodoScreen(
                 routineProgress = routineProgress,
                 nowMillis = nowMillis,
                 onDownloadCsv = onDownloadAnalytics,
+            )
+
+            AppSection.SETTINGS -> SettingsSection(
+                modifier = Modifier.padding(innerPadding),
+                backupBusy = backupBusy,
+                onExportBackup = onExportBackup,
+                onRestoreBackup = onRestoreBackup,
             )
         }
     }

@@ -7,7 +7,15 @@ import android.database.DatabaseUtils
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import com.example.todotimer.util.TimeTracking
+import java.io.File
+import java.io.FileInputStream
+import java.io.InputStream
+import java.io.OutputStream
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.time.DayOfWeek
+import java.util.UUID
 
 class TaskDatabase(context: Context) : SQLiteOpenHelper(
     context,
@@ -15,6 +23,8 @@ class TaskDatabase(context: Context) : SQLiteOpenHelper(
     null,
     DATABASE_VERSION,
 ) {
+    private val appContext = context.applicationContext
+
     override fun onConfigure(db: SQLiteDatabase) {
         super.onConfigure(db)
         db.setForeignKeyConstraintsEnabled(true)
@@ -55,6 +65,140 @@ class TaskDatabase(context: Context) : SQLiteOpenHelper(
         if (oldVersion < 5) createReusableTasksTable(db)
         if (oldVersion < 6) addRoutinesAndAttribution(db)
         if (oldVersion < 7) addVersionSevenFields(db)
+    }
+
+    /**
+     * Closes SQLite first so any WAL contents are checkpointed into a consistent database snapshot.
+     * The helper is reopened before returning so normal app use can continue.
+     */
+    fun exportEncryptedBackup(output: OutputStream, password: CharArray) {
+        val databaseFile = appContext.getDatabasePath(DATABASE_NAME)
+        close()
+        try {
+            require(databaseFile.isFile) { "There is no Max Delta database to back up." }
+            FileInputStream(databaseFile).use { input ->
+                EncryptedBackupCodec.encrypt(input, output, password)
+            }
+        } finally {
+            writableDatabase
+        }
+    }
+
+    /**
+     * Authenticates and validates the replacement before touching the live database. If opening or
+     * migrating the restored database fails, the previous database is moved back into place.
+     */
+    fun restoreEncryptedBackup(input: InputStream, password: CharArray) {
+        val databaseFile = appContext.getDatabasePath(DATABASE_NAME)
+        val databaseDirectory = requireNotNull(databaseFile.parentFile) {
+            "The database directory is unavailable."
+        }.apply { mkdirs() }
+        val restoreFile = File(
+            databaseDirectory,
+            "$DATABASE_NAME.restore-${UUID.randomUUID()}.tmp",
+        )
+        val rollbackFile = File(
+            databaseDirectory,
+            "$DATABASE_NAME.rollback-${UUID.randomUUID()}.tmp",
+        )
+        var restored = false
+
+        try {
+            restoreFile.outputStream().use { output ->
+                EncryptedBackupCodec.decrypt(input, output, password)
+            }
+            validateDatabaseFile(restoreFile)
+
+            close()
+            deleteSidecars(databaseFile)
+            if (databaseFile.exists()) {
+                moveReplacing(databaseFile, rollbackFile)
+            }
+            moveReplacing(restoreFile, databaseFile)
+
+            try {
+                val restoredDatabase = writableDatabase
+                checkDatabaseIntegrity(restoredDatabase)
+                restored = true
+            } catch (error: Throwable) {
+                close()
+                databaseFile.delete()
+                deleteSidecars(databaseFile)
+                if (rollbackFile.exists()) {
+                    moveReplacing(rollbackFile, databaseFile)
+                    writableDatabase
+                }
+                throw error
+            }
+        } finally {
+            restoreFile.delete()
+            if (restored) rollbackFile.delete()
+        }
+    }
+
+    private fun validateDatabaseFile(file: File) {
+        val database = try {
+            SQLiteDatabase.openDatabase(
+                file.absolutePath,
+                null,
+                SQLiteDatabase.OPEN_READONLY,
+            )
+        } catch (error: Throwable) {
+            throw BackupException("The backup does not contain a valid Max Delta database.", error)
+        }
+        database.use { candidate ->
+            val version = candidate.version
+            if (version !in 1..DATABASE_VERSION) {
+                throw BackupException(
+                    if (version > DATABASE_VERSION) {
+                        "This backup was created by a newer version of Max Delta."
+                    } else {
+                        "The backup does not contain a supported Max Delta database."
+                    },
+                )
+            }
+            val hasTasks = DatabaseUtils.longForQuery(
+                candidate,
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?",
+                arrayOf(TABLE_TASKS),
+            ) == 1L
+            if (!hasTasks) {
+                throw BackupException("The backup does not contain Max Delta tasks.")
+            }
+            checkDatabaseIntegrity(candidate)
+        }
+    }
+
+    private fun checkDatabaseIntegrity(database: SQLiteDatabase) {
+        val result = database.rawQuery("PRAGMA integrity_check", null).use { cursor ->
+            if (cursor.moveToFirst()) cursor.getString(0) else null
+        }
+        if (result != "ok") {
+            throw BackupException("The backup database is damaged.")
+        }
+    }
+
+    private fun moveReplacing(source: File, destination: File) {
+        try {
+            Files.move(
+                source.toPath(),
+                destination.toPath(),
+                StandardCopyOption.REPLACE_EXISTING,
+                StandardCopyOption.ATOMIC_MOVE,
+            )
+        } catch (_: AtomicMoveNotSupportedException) {
+            Files.move(
+                source.toPath(),
+                destination.toPath(),
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+        }
+    }
+
+    private fun deleteSidecars(databaseFile: File) {
+        File(databaseFile.path + "-wal").delete()
+        File(databaseFile.path + "-shm").delete()
+        File(databaseFile.path + "-journal").delete()
     }
 
     fun getObjectives(): List<Objective> = readableDatabase.query(

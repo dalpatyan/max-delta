@@ -1,4 +1,4 @@
-name: Build Android APK
+name: Validate Android release
 
 on:
   pull_request:
@@ -17,9 +17,9 @@ concurrency:
 
 jobs:
   build:
-    name: Test and build unsigned release
+    name: Test, lint, and build unsigned releases
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
 
     steps:
       - name: Check out source
@@ -36,32 +36,42 @@ jobs:
         uses: android-actions/setup-android@v3
 
       - name: Install Android SDK components
-        run: sdkmanager --install "platforms;android-35" "build-tools;35.0.0"
+        run: sdkmanager --install "platforms;android-36" "build-tools;35.0.0"
 
-      - name: Run unit tests
-        run: ./gradlew --no-daemon testDebugUnitTest
+      - name: Run unit tests for both distributions
+        run: ./gradlew --no-daemon testPlayDebugUnitTest testLegacyDebugUnitTest
 
-      - name: Build unsigned release APK
-        run: ./gradlew --no-daemon assembleRelease
+      - name: Run Play release lint
+        run: ./gradlew --no-daemon lintPlayRelease
 
-      - name: Record APK metadata
+      - name: Build unsigned Play bundle and migration APK
+        run: ./gradlew --no-daemon bundlePlayRelease assembleLegacyRelease
+
+      - name: Verify and record release metadata
         shell: bash
         run: |
           set -euo pipefail
-          apk="app/build/outputs/apk/release/app-release-unsigned.apk"
+          apk="app/build/outputs/apk/legacy/release/app-legacy-release-unsigned.apk"
+          aab="app/build/outputs/bundle/playRelease/app-play-release.aab"
           test -s "$apk"
-          "$ANDROID_SDK_ROOT/build-tools/35.0.0/aapt" dump badging "$apk" > app/build/outputs/apk/release/apk-info.txt
-          sha256sum "$apk" > app/build/outputs/apk/release/unsigned-sha256.txt
-          cp "$ANDROID_SDK_ROOT/build-tools/35.0.0/lib/apksigner.jar" app/build/outputs/apk/release/apksigner.jar
+          test -s "$aab"
+          "$ANDROID_SDK_ROOT/build-tools/35.0.0/aapt" dump badging "$apk" > migration-apk-info.txt
+          grep -F "package: name='com.example.todotimer' versionCode='9' versionName='1.8.0-migration'" migration-apk-info.txt
+          unzip -t "$aab"
+          unzip -p "$aab" base/manifest/AndroidManifest.xml | strings | grep -F "com.ugtech.maxdelta"
+          sha256sum "$apk" "$aab" > unsigned-sha256.txt
+          cp "$ANDROID_SDK_ROOT/build-tools/35.0.0/lib/apksigner.jar" apksigner.jar
 
-      - name: Upload APK artifact
+      - name: Upload unsigned release artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: max-delta-unsigned
+          name: max-delta-v1.8-unsigned
           path: |
-            app/build/outputs/apk/release/app-release-unsigned.apk
-            app/build/outputs/apk/release/apk-info.txt
-            app/build/outputs/apk/release/unsigned-sha256.txt
-            app/build/outputs/apk/release/apksigner.jar
+            app/build/outputs/apk/legacy/release/app-legacy-release-unsigned.apk
+            app/build/outputs/bundle/playRelease/app-play-release.aab
+            migration-apk-info.txt
+            unsigned-sha256.txt
+            apksigner.jar
+            app/build/reports/lint-results-playRelease.html
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 14
