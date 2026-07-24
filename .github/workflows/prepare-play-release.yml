@@ -1,0 +1,36 @@
+name: Prepare Play release
+
+on:
+  push:
+    branches:
+      - agent/play-release-v1.8
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: play-release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  source:
+    name: Package reviewed source
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Create source archive
+        run: git archive --format=zip --output=max-delta-source.zip HEAD
+
+      - name: Upload source archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: max-delta-source
+          path: max-delta-source.zip
+          if-no-files-found: error
+          retention-days: 7
